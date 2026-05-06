@@ -9,6 +9,10 @@ import imdbRouter from './routes/imdb.js';
 import importRouter from './routes/import.js';
 import jobsRouter from './routes/jobs.js';
 import filesizeRouter from './routes/filesize.js';
+import tvguideRouter from './routes/tvguide.js';
+import tvrecordRouter from './routes/tvrecord.js';
+import tvrecordingsRouter from './routes/tvrecordings.js';
+import { requireTvh, tvhErrorHandler } from './middleware/requireTvh.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -29,6 +33,10 @@ router.use('/api/imdb', imdbRouter);
 router.use('/api/import', importRouter);
 router.use('/api/jobs', jobsRouter);
 router.use('/api/filesize', filesizeRouter);
+router.use('/api/tvguide', requireTvh, tvguideRouter);
+router.use('/api/tvrecord', requireTvh, tvrecordRouter);
+router.use('/api/tvrecordings', requireTvh, tvrecordingsRouter);
+router.use(['/api/tvguide', '/api/tvrecord', '/api/tvrecordings'], tvhErrorHandler);
 
 // Serve built frontend
 const publicDir = join(__dirname, '..', 'public');

@@ -23,6 +23,32 @@ export interface ImdbResult {
   poster?: string;
 }
 
+export interface TVGuideResult {
+  eventId: number;
+  channelName: string;
+  title: string;
+  subtitle?: string;        // episode title
+  summary?: string;         // short description
+  description?: string;     // full description
+  start: number;
+  stop: number;
+  hd: boolean;
+  episodeOnscreen?: string; // e.g. "S01E05" or "1/5"
+  image?: string;
+  dvrState?: string;        // "scheduled" | "recording" | "completed" etc.
+}
+
+export interface DvrEntry {
+  uuid: string;
+  title: string;
+  channelName: string;
+  start: number;
+  stop: number;
+  status: 'scheduled' | 'recording' | 'completed' | 'missed' | 'invalid';
+  filename?: string;
+  filesize?: number;
+}
+
 export interface ImportRequest {
   videoUrl: string;
   title: string;
@@ -55,6 +81,36 @@ export async function searchMediathek(query: string): Promise<MediathekResult[]>
   if (!res.ok) throw new Error(await res.text());
   const data = await res.json();
   return data?.result?.results ?? [];
+}
+
+export async function listRecordings(): Promise<DvrEntry[]> {
+  const res = await fetch(`${BASE}/api/tvrecordings`);
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? res.statusText);
+  return res.json();
+}
+
+export async function searchTVGuide(q: string): Promise<TVGuideResult[]> {
+  const res = await fetch(`${BASE}/api/tvguide?q=${encodeURIComponent(q)}`);
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? res.statusText);
+  return res.json();
+}
+
+export async function recordTV(entry: {
+  channelName: string;
+  start: number;
+  stop: number;
+  title?: string;
+}): Promise<{ uuid: string }> {
+  const res = await fetch(`${BASE}/api/tvrecord`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(entry),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error ?? res.statusText);
+  }
+  return res.json();
 }
 
 export async function searchImdb(q: string): Promise<ImdbResult[]> {
@@ -118,6 +174,10 @@ export function formatBytes(bytes: number): string {
 
 export function formatDate(timestamp: number): string {
   return new Date(timestamp * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+export function formatTime(timestamp: number): string {
+  return new Date(timestamp * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 }
 
 export function formatDuration(seconds: number): string {

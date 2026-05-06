@@ -35,4 +35,8 @@ export const config = {
   tempDir: process.env.MEDIA_IMPORT_TEMP_DIR ?? '/tmp/media-import',
   dataDir: process.env.MEDIA_IMPORT_DATA_DIR ?? './data',
   presetPath: process.env.MEDIA_IMPORT_PRESET_PATH ?? './data/presets/default.json',
+  tvheadendUrl: process.env.MEDIA_IMPORT_TVHEADEND_URL?.replace(/\/$/, '') ?? '',
+  tvheadendUser: process.env.MEDIA_IMPORT_TVHEADEND_USER ?? '',
+  tvheadendPass: process.env.MEDIA_IMPORT_TVHEADEND_PASS ?? '',
+  tvheadendDvrUuid: process.env.MEDIA_IMPORT_TVHEADEND_DVR_UUID ?? '',
 };

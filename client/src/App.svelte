@@ -2,13 +2,14 @@
   import SearchPanel from './components/SearchPanel.svelte';
   import ImdbSelector from './components/ImdbSelector.svelte';
   import MediaForm from './components/MediaForm.svelte';
+  import RecordingQueue from './components/RecordingQueue.svelte';
   import JobQueue from './components/JobQueue.svelte';
-  import { startImport, getFileSize, formatBytes, type ImdbResult, type MediathekResult } from './api.js';
+  import { startImport, recordTV, type ImdbResult, type MediathekResult, type TVGuideResult } from './api.js';
 
   // Source
   let videoUrl = '';
-  let remoteFileSize: number | null = null;
-  let fetchingSize = false;
+  let selectedMediathekId: string | null = null;
+  let tvEvent: TVGuideResult | null = null;
 
   // Media form state
   let title = '';
@@ -26,36 +27,53 @@
   // Submission
   let submitting = false;
   let submitError = '';
+  let submitSuccess = '';
   let jobQueue: JobQueue;
 
   function handleMediathekSelect(result: MediathekResult, url: string) {
+    tvEvent = null;
     videoUrl = url;
+    selectedMediathekId = result.id;
     const rawTitle = result.title || result.topic;
     title = rawTitle;
     imdbQuery = rawTitle;
     selectedImdb = null;
-    fetchRemoteSize(url);
+    submitSuccess = '';
   }
 
   function handleUrlChange(url: string) {
+    tvEvent = null;
+    selectedMediathekId = null;
     videoUrl = url;
-    fetchRemoteSize(url);
+    submitSuccess = '';
+  }
+
+  function handleTVSelect(r: TVGuideResult) {
+    videoUrl = '';
+    selectedMediathekId = null;
+    tvEvent = r;
+    title = r.title;
+    imdbQuery = r.title;
+    selectedImdb = null;
+    submitSuccess = '';
+    // Pre-fill episode info if EPG provides it
+    if (r.episodeOnscreen) {
+      const m = r.episodeOnscreen.match(/S(\d+)E(\d+)/i);
+      if (m) {
+        season = parseInt(m[1], 10);
+        episode = parseInt(m[2], 10);
+      }
+    }
+    if (r.subtitle) episodeTitle = r.subtitle;
   }
 
   function clearUrl() {
     videoUrl = '';
-    remoteFileSize = null;
+    selectedMediathekId = null;
   }
 
-  async function fetchRemoteSize(url: string) {
-    remoteFileSize = null;
-    if (!url.trim()) return;
-    fetchingSize = true;
-    try {
-      remoteFileSize = await getFileSize(url);
-    } finally {
-      fetchingSize = false;
-    }
+  function clearTVEvent() {
+    tvEvent = null;
   }
 
   $: imdbQuery = title;
@@ -100,41 +118,66 @@
 
   $: canSubmit =
     !submitting &&
-    videoUrl.trim() !== '' &&
+    (videoUrl.trim() !== '' || tvEvent !== null) &&
     selectedImdb !== null &&
     title.trim() !== '' &&
     year !== '' &&
     (mediaType === 'movie' || (season !== '' && episode !== ''));
 
+  function resetForm() {
+    title = '';
+    year = '';
+    seriesTitle = '';
+    season = '';
+    episode = '';
+    episodeTitle = '';
+    selectedImdb = null;
+    imdbQuery = '';
+  }
+
   async function handleSubmit() {
     if (!canSubmit || !selectedImdb) return;
     submitting = true;
     submitError = '';
+    submitSuccess = '';
     try {
-      const { jobId } = await startImport({
-        videoUrl,
-        title: title.trim(),
-        year: Number(year),
-        imdbId: selectedImdb.imdbId,
-        mediaType,
-        seriesTitle: seriesTitle.trim() || undefined,
-        season: season !== '' ? Number(season) : undefined,
-        episode: episode !== '' ? Number(episode) : undefined,
-        episodeTitle: episodeTitle.trim() || undefined,
-      });
-      await jobQueue.addJob(jobId);
-      // Reset form
-      videoUrl = '';
-      title = '';
-      year = '';
-      seriesTitle = '';
-      season = '';
-      episode = '';
-      episodeTitle = '';
-      selectedImdb = null;
-      imdbQuery = '';
+      if (tvEvent) {
+        let recordingTitle: string;
+        if (mediaType === 'series') {
+          const base = sanitize((seriesTitle.trim() || title.trim()) + ` (${year})`);
+          const epTag = `S${pad(season || 1)}E${pad(episode || 1)}`;
+          const epSuffix = episodeTitle.trim() ? ` - ${sanitize(episodeTitle.trim())}` : '';
+          recordingTitle = `${base} - ${epTag}${epSuffix}`;
+        } else {
+          recordingTitle = sanitize(`${title.trim()} (${year}) [imdbid-${selectedImdb.imdbId}]`);
+        }
+        await recordTV({
+          channelName: tvEvent.channelName,
+          start: tvEvent.start,
+          stop: tvEvent.stop,
+          title: recordingTitle,
+        });
+        submitSuccess = `Scheduled on ${tvEvent.channelName}`;
+        tvEvent = null;
+        resetForm();
+      } else {
+        const { jobId } = await startImport({
+          videoUrl,
+          title: title.trim(),
+          year: Number(year),
+          imdbId: selectedImdb.imdbId,
+          mediaType,
+          seriesTitle: seriesTitle.trim() || undefined,
+          season: season !== '' ? Number(season) : undefined,
+          episode: episode !== '' ? Number(episode) : undefined,
+          episodeTitle: episodeTitle.trim() || undefined,
+        });
+        await jobQueue.addJob(jobId);
+        videoUrl = '';
+        resetForm();
+      }
     } catch (e: any) {
-      submitError = e.message ?? 'Import failed';
+      submitError = e.message ?? 'Failed';
     } finally {
       submitting = false;
     }
@@ -148,21 +191,13 @@
   </header>
 
   <div class="card">
-    <SearchPanel onSelect={handleMediathekSelect} onUrlChange={handleUrlChange} />
-
-    {#if videoUrl}
-      <div class="selected-url">
-        <span class="url-value">{videoUrl}</span>
-        <span class="url-right">
-          {#if fetchingSize}
-            <span class="size-loading">…</span>
-          {:else if remoteFileSize !== null}
-            <span class="size-value">{formatBytes(remoteFileSize)}</span>
-          {/if}
-          <button class="clear-btn" on:click={clearUrl} title="Clear">✕</button>
-        </span>
-      </div>
-    {/if}
+    <SearchPanel
+      onSelect={handleMediathekSelect}
+      onUrlChange={handleUrlChange}
+      onTVSelect={handleTVSelect}
+      selectedMediathekId={selectedMediathekId}
+      selectedTVEventId={tvEvent?.eventId ?? null}
+    />
 
     <hr class="divider" />
 
@@ -188,8 +223,8 @@
 
     <hr class="divider" />
 
-    <!-- Filename preview -->
-    {#if previewPath}
+    <!-- Filename preview (not shown for TV — TVHeadend controls the filename) -->
+    {#if previewPath && !tvEvent}
       <div class="preview-path">
         <span class="preview-label">Output path</span>
         <span class="preview-value">{previewPath}</span>
@@ -200,10 +235,20 @@
     {#if submitError}
       <p class="submit-error">{submitError}</p>
     {/if}
+    {#if submitSuccess}
+      <p class="submit-success">{submitSuccess}</p>
+    {/if}
     <button class="btn-primary btn-import" disabled={!canSubmit} on:click={handleSubmit}>
-      {submitting ? 'Starting…' : 'Import'}
+      {#if submitting}
+        {tvEvent ? 'Scheduling…' : 'Starting…'}
+      {:else}
+        {tvEvent ? 'Schedule Recording' : 'Import'}
+      {/if}
     </button>
   </div>
+
+  <!-- TVHeadend recording queue -->
+  <RecordingQueue />
 
   <!-- Job queue -->
   <JobQueue bind:this={jobQueue} />
@@ -274,44 +319,11 @@
     gap: 1rem;
   }
 
-  .selected-url {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 0.4rem 0.6rem 0.4rem 0.75rem;
-    font-size: 0.78rem;
-  }
-  .url-value {
-    flex: 1;
-    min-width: 0;
-    color: var(--text-muted);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    font-family: ui-monospace, 'Cascadia Code', monospace;
-  }
-  .url-right { display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0; }
-  .size-value { font-weight: 700; color: var(--accent); }
-  .size-loading { color: var(--text-muted); }
-  .clear-btn {
-    background: none;
-    border: none;
-    color: var(--text-muted);
-    font-size: 0.7rem;
-    padding: 0.1rem 0.25rem;
-    border-radius: 3px;
-    line-height: 1;
-    transition: color 0.15s;
-  }
-  .clear-btn:hover { color: var(--error); }
-
   .divider { border: none; border-top: 1px solid var(--border); margin: 0; }
 
   .btn-import { width: 100%; padding: 0.65rem; font-size: 1rem; }
   .submit-error { color: var(--error); font-size: 0.875rem; margin: 0; }
+  .submit-success { color: #16a34a; font-size: 0.875rem; margin: 0; font-weight: 600; }
 
   .preview-path {
     display: flex;

@@ -1,12 +1,16 @@
 <script lang="ts">
-  import { searchMediathek, formatDuration, formatDate, formatBytes, type MediathekResult } from '../api.js';
+  import { searchMediathek, searchTVGuide, formatDuration, formatDate, formatTime, formatBytes, type MediathekResult, type TVGuideResult } from '../api.js';
 
   export let onSelect: (result: MediathekResult, url: string) => void;
   export let onUrlChange: (url: string) => void;
+  export let onTVSelect: (result: TVGuideResult) => void;
+  export let selectedMediathekId: string | null = null;
+  export let selectedTVEventId: number | null = null;
 
-  let mode: 'mediathek' | 'url' = 'mediathek';
+  let mode: 'mediathek' | 'url' | 'tv' = 'mediathek';
   let query = '';
   let results: MediathekResult[] = [];
+  let tvResults: TVGuideResult[] = [];
   let loading = false;
   let error = '';
 
@@ -19,8 +23,13 @@
     loading = true;
     error = '';
     results = [];
+    tvResults = [];
     try {
-      results = await searchMediathek(query.trim());
+      if (mode === 'mediathek') {
+        results = await searchMediathek(query.trim());
+      } else {
+        tvResults = await searchTVGuide(query.trim());
+      }
     } catch (e: any) {
       error = e.message ?? 'Search failed';
     } finally {
@@ -35,6 +44,7 @@
   function handleModeChange() {
     query = '';
     results = [];
+    tvResults = [];
     error = '';
   }
 
@@ -53,25 +63,16 @@
   <div class="search-row">
     <select bind:value={mode} on:change={handleModeChange} class="source-select">
       <option value="mediathek">MediathekViewWeb</option>
+      <option value="tv">TV Guide</option>
       <option value="url">URL</option>
     </select>
-    {#if mode === 'url'}
-      <input
-        bind:value={query}
-        on:keydown={handleKey}
-        placeholder="https://example.com/video.mp4"
-        type="url"
-        class="input"
-      />
-    {:else}
-      <input
-        bind:value={query}
-        on:keydown={handleKey}
-        placeholder="Search MediathekViewWeb…"
-        type="text"
-        class="input"
-      />
-    {/if}
+    <input
+      bind:value={query}
+      on:keydown={handleKey}
+      placeholder={mode === 'url' ? 'https://example.com/video.mp4' : mode === 'tv' ? 'Search TV guide…' : 'Search MediathekViewWeb…'}
+      type="text"
+      class="input"
+    />
     <button on:click={search} class="btn-search" disabled={loading} title={mode === 'url' ? 'Confirm URL' : 'Search'}>
       {#if loading}
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" width="18" height="18" class="spin">
@@ -94,7 +95,7 @@
     {#if results.length > 0}
       <ul class="results">
         {#each results as r}
-          <li class="result-item">
+          <li class="result-item" class:active={r.id === selectedMediathekId}>
             <div class="result-meta">
               <span class="channel">{r.channel}</span>
               {#if r.topic}<span class="sep">·</span><span class="topic">{r.topic}</span>{/if}
@@ -122,6 +123,40 @@
       </ul>
     {:else if !loading && query}
       <p class="empty">No results found.</p>
+    {/if}
+  {/if}
+
+  {#if mode === 'tv'}
+    {#if tvResults.length > 0}
+      <ul class="results">
+        {#each tvResults as r}
+          {@const duration = r.stop - r.start}
+          <!-- svelte-ignore a11y-click-events-have-key-events -->
+          <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+          <li class="result-item result-item-tv" class:active={r.eventId === selectedTVEventId} on:click={() => onTVSelect(r)}>
+            <div class="result-meta">
+              <span class="channel">{r.channelName}</span>
+              <span class="sep">·</span><span class="date">{formatDate(r.start)}</span>
+              <span class="sep">·</span><span>{formatTime(r.start)}–{formatTime(r.stop)}</span>
+              <span class="sep">·</span><span class="duration">{formatDuration(duration)}</span>
+              {#if r.hd}<span class="hd-badge">HD</span>{/if}
+              {#if r.episodeOnscreen}<span class="ep-badge">{r.episodeOnscreen}</span>{/if}
+              {#if r.dvrState && r.dvrState !== 'none'}
+                <span class="dvr-badge dvr-{r.dvrState}">{r.dvrState}</span>
+              {/if}
+            </div>
+            <div class="result-title">{r.title}</div>
+            {#if r.subtitle}
+              <div class="result-subtitle">{r.subtitle}</div>
+            {/if}
+            {#if r.description || r.summary}
+              <div class="result-desc">{r.description ?? r.summary}</div>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    {:else if !loading && query}
+      <p class="empty">No programmes found.</p>
     {/if}
   {/if}
 </div>
@@ -192,7 +227,9 @@
     border: 1px solid var(--border);
     border-radius: 6px;
     background: var(--bg-card);
+    transition: border-color 0.15s, background 0.15s;
   }
+  .result-item.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--bg-card)); }
   .result-meta { display: flex; align-items: center; font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.25rem; flex-wrap: wrap; }
   .channel { font-weight: 600; color: var(--accent); }
   .sep { margin: 0 0.3rem; opacity: 0.35; }
@@ -213,6 +250,15 @@
   .sd { background: var(--bg-input); color: var(--text); }
   .low { background: var(--bg-input); color: var(--text-muted); }
   .hd:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  .result-item-tv { cursor: pointer; user-select: none; }
+  .result-item-tv:hover { border-color: var(--accent); }
+  .result-subtitle { font-size: 0.82rem; color: var(--text-muted); margin-bottom: 0.15rem; font-style: italic; }
+  .hd-badge { background: var(--accent); color: #fff; font-size: 0.65rem; font-weight: 700; padding: 0.05rem 0.35rem; border-radius: 3px; }
+  .ep-badge { background: var(--bg-input); color: var(--text-muted); font-size: 0.65rem; font-weight: 600; padding: 0.05rem 0.35rem; border-radius: 3px; border: 1px solid var(--border); }
+  .dvr-badge { font-size: 0.65rem; font-weight: 700; padding: 0.05rem 0.35rem; border-radius: 3px; }
+  .dvr-scheduled { background: #dbeafe; color: #1d4ed8; }
+  .dvr-recording { background: #fee2e2; color: #dc2626; }
+  .dvr-completed { background: #dcfce7; color: #16a34a; }
   .error { color: var(--error); font-size: 0.875rem; margin: 0; }
   .empty { color: var(--text-muted); font-size: 0.875rem; margin: 0; }
 </style>
