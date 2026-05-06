@@ -42,6 +42,11 @@
     fetchRemoteSize(url);
   }
 
+  function clearUrl() {
+    videoUrl = '';
+    remoteFileSize = null;
+  }
+
   async function fetchRemoteSize(url: string) {
     remoteFileSize = null;
     if (!url.trim()) return;
@@ -57,8 +62,20 @@
 
   function handleImdbSelect(r: ImdbResult) {
     selectedImdb = r;
-    // Auto-fill year from IMDB result if not already set
-    if (year === '' && r.year) year = r.year;
+    if (r.year) year = r.year;
+
+    const t = (r.type ?? '').toLowerCase();
+    if (t.includes('series')) {
+      mediaType = 'series';
+      seriesTitle = r.title;
+      title = r.title;
+    } else if (t.includes('episode')) {
+      mediaType = 'series';
+      episodeTitle = r.title;
+    } else {
+      mediaType = 'movie';
+      title = r.title;
+    }
   }
 
   function sanitize(s: string): string {
@@ -135,19 +152,15 @@
 
     {#if videoUrl}
       <div class="selected-url">
-        <div class="url-row">
-          <span class="url-label">Selected URL:</span>
-          <span class="url-value">{videoUrl}</span>
-        </div>
-        <div class="url-size">
+        <span class="url-value">{videoUrl}</span>
+        <span class="url-right">
           {#if fetchingSize}
-            <span class="size-loading">Fetching size…</span>
+            <span class="size-loading">…</span>
           {:else if remoteFileSize !== null}
             <span class="size-value">{formatBytes(remoteFileSize)}</span>
-          {:else}
-            <span class="size-unknown">Size unknown</span>
           {/if}
-        </div>
+          <button class="clear-btn" on:click={clearUrl} title="Clear">✕</button>
+        </span>
       </div>
     {/if}
 
@@ -263,21 +276,37 @@
 
   .selected-url {
     display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
+    align-items: center;
+    gap: 0.6rem;
     background: var(--bg-input);
     border: 1px solid var(--border);
     border-radius: 6px;
-    padding: 0.5rem 0.75rem;
-    font-size: 0.8rem;
+    padding: 0.4rem 0.6rem 0.4rem 0.75rem;
+    font-size: 0.78rem;
   }
-  .url-row { display: flex; gap: 0.4rem; align-items: flex-start; }
-  .url-label { color: var(--text-muted); white-space: nowrap; font-weight: 600; }
-  .url-value { color: var(--accent); word-break: break-all; }
-  .url-size { display: flex; align-items: center; }
-  .size-value { font-weight: 700; color: var(--text); }
-  .size-loading { color: var(--text-muted); font-style: italic; }
-  .size-unknown { color: var(--text-muted); }
+  .url-value {
+    flex: 1;
+    min-width: 0;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-family: ui-monospace, 'Cascadia Code', monospace;
+  }
+  .url-right { display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0; }
+  .size-value { font-weight: 700; color: var(--accent); }
+  .size-loading { color: var(--text-muted); }
+  .clear-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    padding: 0.1rem 0.25rem;
+    border-radius: 3px;
+    line-height: 1;
+    transition: color 0.15s;
+  }
+  .clear-btn:hover { color: var(--error); }
 
   .divider { border: none; border-top: 1px solid var(--border); margin: 0; }
 

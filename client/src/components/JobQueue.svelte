@@ -52,6 +52,12 @@
     error: 'Error',
   };
 
+  const phaseProgressColor: Record<string, string> = {
+    downloading: '#3b82f6',
+    transcoding: '#8b5cf6',
+    moving: '#f59e0b',
+  };
+
   const phaseColor: Record<string, string> = {
     queued: '#6b7280',
     downloading: '#3b82f6',
@@ -160,13 +166,7 @@
 
           {#if job.phase !== 'queued' && job.phase !== 'done' && job.phase !== 'error'}
             <div class="progress-bar">
-              <div class="progress-fill" style="width:{job.percent}%"></div>
-            </div>
-          {/if}
-
-          {#if job.command}
-            <div class="command-block">
-              <code class="command-code">{job.command}</code>
+              <div class="progress-fill" style="width:{job.percent}%; background:{phaseProgressColor[job.phase] ?? 'var(--accent)'}"></div>
             </div>
           {/if}
 
@@ -191,6 +191,11 @@
 
           {#if openLogs.has(job.id)}
             <div class="log-panel">
+              {#if job.command}
+                <div class="command-block">
+                  <code class="command-code">{job.command}</code>
+                </div>
+              {/if}
               {#if logContent[job.id]}
                 <pre class="log-pre">{logContent[job.id]}</pre>
               {:else}

@@ -63,12 +63,6 @@
         <input id="ep-title" class="input" bind:value={episodeTitle} placeholder="Optional episode title" />
       </div>
     </div>
-    <div class="row">
-      <div class="field">
-        <label for="ep-imdb-title">IMDB Search Title</label>
-        <input id="ep-imdb-title" class="input" bind:value={title} placeholder="Title used for IMDB search (series name)" />
-      </div>
-    </div>
   {/if}
 </div>
 

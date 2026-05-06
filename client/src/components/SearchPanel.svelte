@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { searchMediathek, formatDuration, type MediathekResult } from '../api.js';
+  import { searchMediathek, formatDuration, formatDate, formatBytes, type MediathekResult } from '../api.js';
 
   export let onSelect: (result: MediathekResult, url: string) => void;
   export let onUrlChange: (url: string) => void;
@@ -97,12 +97,15 @@
           <li class="result-item">
             <div class="result-meta">
               <span class="channel">{r.channel}</span>
-              {#if r.topic}
-                <span class="topic">{r.topic}</span>
-              {/if}
-              <span class="duration">{formatDuration(r.duration)}</span>
+              {#if r.topic}<span class="sep">·</span><span class="topic">{r.topic}</span>{/if}
+              <span class="sep">·</span><span class="duration">{formatDuration(r.duration)}</span>
+              {#if r.timestamp}<span class="sep">·</span><span class="date">{formatDate(r.timestamp)}</span>{/if}
+              {#if r.size}<span class="size">{formatBytes(r.size)}</span>{/if}
             </div>
             <div class="result-title">{r.title}</div>
+            {#if r.description}
+              <div class="result-desc">{r.description}</div>
+            {/if}
             <div class="result-actions">
               {#if r.url_video_hd}
                 <button class="btn-quality hd" on:click={() => pick(r, 'hd')}>HD</button>
@@ -190,9 +193,12 @@
     border-radius: 6px;
     background: var(--bg-card);
   }
-  .result-meta { display: flex; gap: 0.5rem; align-items: center; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.25rem; }
+  .result-meta { display: flex; align-items: center; font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.25rem; flex-wrap: wrap; }
   .channel { font-weight: 600; color: var(--accent); }
-  .result-title { font-size: 0.95rem; font-weight: 500; margin-bottom: 0.4rem; }
+  .sep { margin: 0 0.3rem; opacity: 0.35; }
+  .size { margin-left: auto; font-weight: 500; }
+  .result-title { font-size: 0.95rem; font-weight: 500; margin-bottom: 0.2rem; }
+  .result-desc { font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.3rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.4; }
   .result-actions { display: flex; gap: 0.4rem; }
   .btn-quality {
     padding: 0.2rem 0.6rem;

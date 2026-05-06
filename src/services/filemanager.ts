@@ -17,7 +17,7 @@ export function buildTargetPath(req: ImportRequest, transcodedPath?: string): { 
   if (req.mediaType === 'movie') {
     const name = sanitize(`${req.title} (${req.year}) [imdbid-${req.imdbId}]`);
     return {
-      dir: join(config.movieBaseDir, name),
+      dir: config.movieBaseDir,
       file: `${name}${ext}`,
     };
   }

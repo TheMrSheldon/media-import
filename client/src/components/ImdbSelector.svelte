@@ -44,7 +44,7 @@
 
 <div class="imdb-section">
   <div class="header">
-    <span class="section-title">IMDB Entry</span>
+    <span class="section-title">IMDb</span>
     {#if selected}
       <span class="selected-badge">✓ {selected.title} ({selected.year ?? '?'})</span>
     {/if}
@@ -127,8 +127,8 @@
   }
   .result-item:hover { border-color: var(--accent); }
   .result-item.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--bg-card)); }
-  .poster { width: 36px; height: 52px; object-fit: cover; border-radius: 3px; flex-shrink: 0; }
-  .poster-placeholder { width: 36px; height: 52px; background: var(--bg-input); border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; color: var(--text-muted); flex-shrink: 0; }
+  .poster { width: 42px; height: 60px; object-fit: cover; border-radius: 3px; flex-shrink: 0; }
+  .poster-placeholder { width: 42px; height: 60px; background: var(--bg-input); border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; color: var(--text-muted); flex-shrink: 0; }
   .info { flex: 1; min-width: 0; }
   .title { font-size: 0.9rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .meta { display: flex; gap: 0.4rem; font-size: 0.75rem; color: var(--text-muted); margin-top: 0.15rem; }
