@@ -64,12 +64,62 @@ export interface ImportRequest {
 export interface Job {
   id: string;
   title: string;
-  phase: 'queued' | 'downloading' | 'transcoding' | 'moving' | 'done' | 'error';
+  phase: 'queued' | 'cutting' | 'downloading' | 'transcoding' | 'moving' | 'done' | 'error';
   percent: number;
   message: string;
   downloadedBytes: number | null;
   command: string | null;
   createdAt: number;
+}
+
+export interface CutSegment { start: number; end: number; }
+
+export interface CutImportRequest {
+  filename: string;
+  segments: CutSegment[];
+  title: string;
+  year: number;
+  imdbId: string;
+  mediaType: 'movie' | 'series';
+  seriesTitle?: string;
+  season?: number;
+  episode?: number;
+  episodeTitle?: string;
+}
+
+export interface UncutFile { name: string; mtime: number; size: number; }
+
+export async function listUncutFiles(): Promise<UncutFile[]> {
+  const res = await fetch(`${BASE}/api/cut/files`);
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? res.statusText);
+  const data = await res.json();
+  return data.files as UncutFile[];
+}
+
+export async function getUncutDuration(filename: string): Promise<number> {
+  const res = await fetch(`${BASE}/api/cut/duration/${encodeURIComponent(filename)}`);
+  if (!res.ok) return 0;
+  const data = await res.json();
+  return data.duration ?? 0;
+}
+
+
+export async function startCutImport(req: CutImportRequest): Promise<{ jobId: string }> {
+  const res = await fetch(`${BASE}/api/cut/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error ?? res.statusText);
+  }
+  return res.json();
+}
+
+export function uncutStreamUrl(filename: string, seek = 0): string {
+  const q = seek > 0 ? `?seek=${seek}` : '';
+  return `${BASE}/api/cut/stream/${encodeURIComponent(filename)}${q}`;
 }
 
 export async function searchMediathek(query: string): Promise<MediathekResult[]> {

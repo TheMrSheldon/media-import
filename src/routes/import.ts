@@ -1,25 +1,15 @@
 import { Router, Request, Response } from 'express';
-import { readFile, unlink } from 'fs/promises';
+import { unlink } from 'fs/promises';
 import { extname, join } from 'path';
 import { config } from '../config.js';
 import { createJob, updateJob, appendLog, type ImportRequest } from '../jobs.js';
 import { downloadFile } from '../services/downloader.js';
 import { transcodeWithPreset } from '../services/transcoder.js';
-import { presetToFfmpeg, loadPreset, type HBPreset } from '../services/preset-parser.js';
+import { presetToFfmpeg } from '../services/preset-parser.js';
 import { moveToLibrary } from '../services/filemanager.js';
+import { activePreset } from '../services/active-preset.js';
 
 const router = Router();
-
-// Load preset once at startup (non-fatal if missing — falls back to null)
-let activePreset: HBPreset | null = null;
-readFile(config.presetPath, 'utf-8')
-  .then((raw) => {
-    activePreset = loadPreset(raw);
-    console.log(`  Preset  → "${activePreset.PresetName ?? 'unnamed'}" (${config.presetPath})`);
-  })
-  .catch(() => {
-    console.warn(`  Preset  → not found at ${config.presetPath}, using built-in defaults`);
-  });
 
 router.post('/', (req: Request, res: Response) => {
   const body = req.body as ImportRequest;

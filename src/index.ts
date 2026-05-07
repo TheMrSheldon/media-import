@@ -13,6 +13,8 @@ import tvguideRouter from './routes/tvguide.js';
 import tvrecordRouter from './routes/tvrecord.js';
 import tvrecordingsRouter from './routes/tvrecordings.js';
 import { requireTvh, tvhErrorHandler } from './middleware/requireTvh.js';
+import cutRouter from './routes/cut.js';
+import { initPreset } from './services/active-preset.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -33,6 +35,7 @@ router.use('/api/imdb', imdbRouter);
 router.use('/api/import', importRouter);
 router.use('/api/jobs', jobsRouter);
 router.use('/api/filesize', filesizeRouter);
+router.use('/api/cut', cutRouter);
 router.use('/api/tvguide', requireTvh, tvguideRouter);
 router.use('/api/tvrecord', requireTvh, tvrecordRouter);
 router.use('/api/tvrecordings', requireTvh, tvrecordingsRouter);
@@ -50,6 +53,7 @@ const base = config.basePath === '/' ? '' : config.basePath;
 app.use(base || '/', router);
 
 await initJobs();
+await initPreset();
 
 function shutdown() {
   flushJobs();

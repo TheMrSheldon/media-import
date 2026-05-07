@@ -39,4 +39,5 @@ export const config = {
   tvheadendUser: process.env.MEDIA_IMPORT_TVHEADEND_USER ?? '',
   tvheadendPass: process.env.MEDIA_IMPORT_TVHEADEND_PASS ?? '',
   tvheadendDvrUuid: process.env.MEDIA_IMPORT_TVHEADEND_DVR_UUID ?? '',
+  uncutPath: process.env.MEDIA_IMPORT_UNCUT_PATH ?? '',
 };

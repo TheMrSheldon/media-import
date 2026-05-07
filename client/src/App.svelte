@@ -4,7 +4,10 @@
   import MediaForm from './components/MediaForm.svelte';
   import RecordingQueue from './components/RecordingQueue.svelte';
   import JobQueue from './components/JobQueue.svelte';
+  import CutEditor from './components/CutEditor.svelte';
   import { startImport, recordTV, type ImdbResult, type MediathekResult, type TVGuideResult } from './api.js';
+
+  let page: 'import' | 'cut' = 'import';
 
   // Source
   let videoUrl = '';
@@ -186,10 +189,23 @@
 
 <main>
   <header>
-    <h1>Media Import</h1>
-    <p class="subtitle">Download, transcode, and import to Jellyfin</p>
+    <div class="header-top">
+      <div>
+        <h1>Media Import</h1>
+        <p class="subtitle">Download, transcode, and import to Jellyfin</p>
+      </div>
+      <nav class="page-nav">
+        <button class="nav-btn" class:active={page === 'import'} on:click={() => page = 'import'}>Import</button>
+        <button class="nav-btn" class:active={page === 'cut'} on:click={() => page = 'cut'}>Cut Editor</button>
+      </nav>
+    </div>
   </header>
 
+  {#if page === 'cut'}
+    <div class="card">
+      <CutEditor on:job={(e) => jobQueue?.addJob(e.detail.jobId)} />
+    </div>
+  {:else}
   <div class="card">
     <SearchPanel
       onSelect={handleMediathekSelect}
@@ -246,12 +262,15 @@
       {/if}
     </button>
   </div>
+  {/if}
 
-  <!-- TVHeadend recording queue -->
-  <RecordingQueue />
+  {#if page === 'import'}
+    <!-- TVHeadend recording queue -->
+    <RecordingQueue />
 
-  <!-- Job queue -->
-  <JobQueue bind:this={jobQueue} />
+    <!-- Job queue -->
+    <JobQueue bind:this={jobQueue} />
+  {/if}
 </main>
 
 <style>
@@ -306,8 +325,23 @@
     padding: 2rem 1rem 4rem;
   }
   header { margin-bottom: 1.5rem; }
+  .header-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
   h1 { margin: 0; font-size: 1.75rem; font-weight: 800; }
   .subtitle { margin: 0.25rem 0 0; color: var(--text-muted); font-size: 0.9rem; }
+  .page-nav { display: flex; gap: 0.4rem; flex-shrink: 0; margin-top: 0.25rem; }
+  .nav-btn {
+    padding: 0.4rem 0.9rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-card);
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+  }
+  .nav-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .nav-btn.active { border-color: var(--accent); background: var(--accent); color: #fff; }
 
   .card {
     background: var(--bg-card);

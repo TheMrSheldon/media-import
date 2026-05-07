@@ -45,6 +45,7 @@
 
   const phaseLabel: Record<string, string> = {
     queued: 'Queued',
+    cutting: 'Cutting',
     downloading: 'Downloading',
     transcoding: 'Transcoding',
     moving: 'Moving',
@@ -53,6 +54,7 @@
   };
 
   const phaseProgressColor: Record<string, string> = {
+    cutting: '#f97316',
     downloading: '#3b82f6',
     transcoding: '#8b5cf6',
     moving: '#f59e0b',
@@ -60,6 +62,7 @@
 
   const phaseColor: Record<string, string> = {
     queued: '#6b7280',
+    cutting: '#f97316',
     downloading: '#3b82f6',
     transcoding: '#8b5cf6',
     moving: '#f59e0b',

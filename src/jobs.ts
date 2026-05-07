@@ -5,7 +5,7 @@ import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { config } from './config.js';
 
-export type JobPhase = 'queued' | 'downloading' | 'transcoding' | 'moving' | 'done' | 'error';
+export type JobPhase = 'queued' | 'cutting' | 'downloading' | 'transcoding' | 'moving' | 'done' | 'error';
 
 export interface Job {
   id: string;
