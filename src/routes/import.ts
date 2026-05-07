@@ -6,13 +6,13 @@ import { createJob, updateJob, appendLog, type ImportRequest } from '../jobs.js'
 import { downloadFile } from '../services/downloader.js';
 import { transcodeWithPreset } from '../services/transcoder.js';
 import { presetToFfmpeg } from '../services/preset-parser.js';
-import { moveToLibrary } from '../services/filemanager.js';
+import { moveToLibrary, destExists } from '../services/filemanager.js';
 import { activePreset } from '../services/active-preset.js';
 
 const router = Router();
 
-router.post('/', (req: Request, res: Response) => {
-  const body = req.body as ImportRequest;
+router.post('/', async (req: Request, res: Response) => {
+  const body = req.body as ImportRequest & { force?: boolean };
 
   if (!body.videoUrl || !body.title || !body.year || !body.imdbId || !body.mediaType) {
     res.status(400).json({ error: 'Missing required fields: videoUrl, title, year, imdbId, mediaType' });
@@ -22,6 +22,14 @@ router.post('/', (req: Request, res: Response) => {
   if (body.mediaType === 'series' && (!body.season || !body.episode)) {
     res.status(400).json({ error: 'season and episode are required for series' });
     return;
+  }
+
+  if (!body.force) {
+    const existing = await destExists(body);
+    if (existing) {
+      res.status(409).json({ conflict: true, existingPath: existing });
+      return;
+    }
   }
 
   const displayTitle =

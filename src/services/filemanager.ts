@@ -1,4 +1,4 @@
-import { mkdir, rename } from 'fs/promises';
+import { mkdir, rename, access } from 'fs/promises';
 import { extname, join } from 'path';
 import { config } from '../config.js';
 import type { ImportRequest } from '../jobs.js';
@@ -35,6 +35,12 @@ export function buildTargetPath(req: ImportRequest, transcodedPath?: string): { 
     dir: join(config.seriesBaseDir, sanitize(`${series} (${req.year})`), seasonDir),
     file: filename,
   };
+}
+
+export async function destExists(req: ImportRequest): Promise<string | null> {
+  const { dir, file } = buildTargetPath(req);
+  const dest = join(dir, file);
+  return access(dest).then(() => dest).catch(() => null);
 }
 
 export async function moveToLibrary(

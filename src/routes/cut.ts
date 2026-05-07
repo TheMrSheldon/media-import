@@ -7,7 +7,7 @@ import { createJob, updateJob, appendLog } from '../jobs.js';
 import { cutToIntermediate, getVideoDuration, type AdSegment } from '../services/cutter.js';
 import { transcodeWithPreset } from '../services/transcoder.js';
 import { presetToFfmpeg } from '../services/preset-parser.js';
-import { moveToLibrary } from '../services/filemanager.js';
+import { moveToLibrary, destExists } from '../services/filemanager.js';
 import { activePreset } from '../services/active-preset.js';
 
 const router = Router();
@@ -62,6 +62,39 @@ router.get('/duration/:encodedFilename', async (req: Request, res: Response, nex
   }
 });
 
+// GET /api/cut/frame/:filename?t=<seconds>  — extract a single JPEG frame, cached
+router.get('/frame/:encodedFilename', (req: Request, res: Response) => {
+  if (!guardUncutPath(res)) return;
+  const filename = decodeURIComponent(req.params.encodedFilename);
+  const filePath = resolveFilePath(filename);
+  if (!filePath) { res.status(400).end(); return; }
+
+  const t = parseFloat(req.query.t as string);
+  if (isNaN(t) || t < 0) { res.status(400).end(); return; }
+
+  // Two-pass seek: fast keyframe seek to (t-2s), then accurate decode to t
+  const preseek = Math.max(0, t - 2);
+  const fineseek = parseFloat((t - preseek).toFixed(6));
+  const args = [
+    '-ss', preseek.toFixed(6),
+    '-i', filePath,
+    ...(fineseek > 0.001 ? ['-ss', fineseek.toFixed(6)] : []),
+    '-frames:v', '1',
+    '-f', 'image2pipe',
+    '-c:v', 'mjpeg',
+    '-vf', 'scale=160:-2',
+    '-q:v', '5',
+    'pipe:1',
+  ];
+
+  const ff = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'ignore'] });
+  res.setHeader('Content-Type', 'image/jpeg');
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  ff.stdout.pipe(res);
+  ff.on('error', () => { if (!res.headersSent) res.status(500).end(); });
+  req.on('close', () => ff.kill());
+});
+
 // GET /api/cut/stream/:filename?seek=<seconds>
 // Transcodes on the fly from the given seek position — only the portion the client
 // downloads is transcoded.  -ss before -i does a fast keyframe seek.
@@ -103,9 +136,10 @@ interface CutStartBody {
   season?: number;
   episode?: number;
   episodeTitle?: string;
+  force?: boolean;
 }
 
-router.post('/start', (req: Request, res: Response) => {
+router.post('/start', async (req: Request, res: Response) => {
   if (!guardUncutPath(res)) return;
 
   const body = req.body as CutStartBody;
@@ -122,6 +156,18 @@ router.post('/start', (req: Request, res: Response) => {
   if (!filePath) {
     res.status(400).json({ error: 'Invalid filename' });
     return;
+  }
+
+  if (!body.force) {
+    const existing = await destExists({
+      videoUrl: '', title: body.title, year: body.year, imdbId: body.imdbId,
+      mediaType: body.mediaType, seriesTitle: body.seriesTitle,
+      season: body.season, episode: body.episode, episodeTitle: body.episodeTitle,
+    });
+    if (existing) {
+      res.status(409).json({ conflict: true, existingPath: existing });
+      return;
+    }
   }
 
   const displayTitle =

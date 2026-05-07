@@ -2,7 +2,7 @@
   import { createEventDispatcher, onMount, onDestroy } from 'svelte';
   import {
     listUncutFiles, startCutImport, uncutStreamUrl, getUncutDuration,
-    searchImdb, formatBytes, formatDate,
+    searchImdb, formatBytes, formatDate, frameUrl, ConflictError,
     type ImdbResult, type CutSegment, type UncutFile,
   } from '../api.js';
   import ImdbSelector from './ImdbSelector.svelte';
@@ -42,9 +42,14 @@
   let videoError = '';
 
   // Editor state
-  let adSegments: CutSegment[] = [];
-  let pendingStart: number | null = null;
+  let markers: number[] = [];   // sorted absolute timestamps; alternating cut/keep boundaries
   let showMetadata = false;
+
+  // Filmstrip preview
+  let filmstripN = 5;
+  let filmstripTime = 0;
+  let bridgeFrameUrl: string | null = null;  // shown while stream reloads to avoid flash of "Loading…"
+  $: filmstripOffsets = Array.from({ length: 2 * filmstripN + 1 }, (_, i) => i - filmstripN);
 
   // IMDB + metadata
   let imdbQuery = '';
@@ -58,6 +63,7 @@
   let episodeTitle = '';
   let submitting = false;
   let submitError = '';
+  let conflictPath: string | null = null;
 
   $: imdbQuery = title;
 
@@ -92,12 +98,11 @@
     const tag = (e.target as HTMLElement).tagName;
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
     if (e.key === ' ')          { e.preventDefault(); togglePlay(); }
-    if (e.key === 'ArrowLeft')  { e.preventDefault(); skip(-30); }
-    if (e.key === 'ArrowRight') { e.preventDefault(); skip(30); }
+    if (e.key === 'ArrowLeft')  { e.preventDefault(); skip(-5); }
+    if (e.key === 'ArrowRight') { e.preventDefault(); skip(10); }
     if (e.key === ',')          { e.preventDefault(); stepFrame(-1); }
     if (e.key === '.')          { e.preventDefault(); stepFrame(1); }
-    if (e.key === 'i' || e.key === 'I') { e.preventDefault(); markIn(); }
-    if (e.key === 'o' || e.key === 'O') { e.preventDefault(); markOut(); }
+    if (e.key === 'm' || e.key === 'M') { e.preventDefault(); addMarker(); }
   }
 
   async function selectFile(f: UncutFile) {
@@ -110,8 +115,9 @@
     currentTime = 0;
     bufferedEnd = 0;
     playing = false;
-    adSegments = [];
-    pendingStart = null;
+    markers = [];
+    filmstripTime = 0;
+    bridgeFrameUrl = null;
     showMetadata = false;
 
     // Pre-fill metadata from IMDB data embedded in filename
@@ -143,8 +149,9 @@
     currentTime = 0;
     bufferedEnd = 0;
     playing = false;
-    adSegments = [];
-    pendingStart = null;
+    markers = [];
+    filmstripTime = 0;
+    bridgeFrameUrl = null;
     showMetadata = false;
   }
 
@@ -153,12 +160,14 @@
       videoDuration = videoEl.duration;
     videoLoaded = true;
     videoError = '';
+    bridgeFrameUrl = null;
+    filmstripTime = streamStart;
     if (shouldAutoPlay) { shouldAutoPlay = false; videoEl.play().catch(() => {}); }
   }
   function onVideoError() { videoError = 'Failed to load video stream.'; }
   function onTimeUpdate() { currentTime = videoEl.currentTime; }
   function onPlay()  { playing = true; }
-  function onPause() { playing = false; }
+  function onPause() { playing = false; filmstripTime = streamStart + (videoEl?.currentTime ?? 0); }
   function onProgress() {
     if (videoEl?.buffered.length)
       bufferedEnd = videoEl.buffered.end(videoEl.buffered.length - 1);
@@ -176,6 +185,7 @@
   function seekToTime(target: number, autoPlay = false) {
     const clamped = Math.max(0, Math.min(target, videoDuration > 0 ? videoDuration - 2 : target));
     streamStart = clamped;
+    filmstripTime = clamped;
     shouldAutoPlay = autoPlay;
     videoLoaded = false;
     bufferedEnd = 0;
@@ -194,6 +204,7 @@
     const newRelative = videoEl.currentTime + step;
     if (newRelative >= 0) {
       videoEl.currentTime = newRelative;
+      filmstripTime = streamStart + newRelative;
     } else if (streamStart + newRelative >= 0) {
       seekToTime(streamStart + newRelative, false);
     }
@@ -206,17 +217,31 @@
     seekToTime(ratio * videoDuration, false);
   }
 
-  function markIn() { pendingStart = streamStart + (videoEl?.currentTime ?? 0); }
-
-  function markOut() {
-    if (pendingStart === null || !videoEl) return;
-    const end = streamStart + videoEl.currentTime;
-    if (end <= pendingStart) { pendingStart = null; return; }
-    adSegments = [...adSegments, { start: pendingStart, end }].sort((a, b) => a.start - b.start);
-    pendingStart = null;
+  function seekFilmstripFrame(ft: number) {
+    // The empty_moov stream is treated as live by the browser so currentTime assignment is ignored.
+    // Always reload the stream, but show the cached filmstrip thumbnail as a bridge so
+    // "Loading…" never flashes — the image is already in the browser's HTTP cache.
+    if (selectedFile) bridgeFrameUrl = frameUrl(selectedFile, ft);
+    seekToTime(ft, false);
   }
 
-  function removeSegment(i: number) { adSegments = adSegments.filter((_, idx) => idx !== i); }
+  function addMarker() {
+    const t = streamStart + (videoEl?.currentTime ?? 0);
+    if (markers.some(m => Math.abs(m - t) < 0.5)) return;
+    markers = [...markers, t].sort((a, b) => a - b);
+  }
+
+  function removeMarker(i: number) { markers = markers.filter((_, idx) => idx !== i); }
+
+  function markersToAdSegments(ms: number[], dur: number): CutSegment[] {
+    if (ms.length === 0 || dur === 0) return [];
+    const points = [0, ...ms, dur];
+    const ads: CutSegment[] = [];
+    for (let i = 0; i < points.length - 1; i += 2) {
+      if (points[i + 1] - points[i] > 0.1) ads.push({ start: points[i], end: points[i + 1] });
+    }
+    return ads;
+  }
 
   function formatSecs(s: number): string {
     if (!isFinite(s) || s < 0) return '--:--';
@@ -237,12 +262,14 @@
     return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}:${String(fr).padStart(2,'0')}`;
   }
 
+  $: derivedAdSegments = markersToAdSegments(markers, videoDuration);
+
   $: keepRegions = (() => {
     if (!videoDuration) return [];
-    const sorted = [...adSegments].sort((a, b) => a.start - b.start);
+    const cuts = derivedAdSegments;
     const kept: { start: number; end: number }[] = [];
     let pos = 0;
-    for (const seg of sorted) {
+    for (const seg of cuts) {
       if (seg.start > pos + 0.1) kept.push({ start: pos, end: seg.start });
       pos = Math.max(pos, seg.end);
     }
@@ -264,7 +291,7 @@
   $: bufEndPct   = videoDuration > 0 ? Math.min(100, bufEndAbs    / videoDuration * 100) : 0;
   $: durationStr = videoDuration > 0 ? formatSecs(videoDuration) : '--:--';
 
-  $: totalCutDuration = adSegments.reduce((acc, s) => acc + (s.end - s.start), 0);
+  $: totalCutDuration = derivedAdSegments.reduce((acc, s) => acc + (s.end - s.start), 0);
 
   function handleImdbSelect(r: ImdbResult) {
     selectedImdb = r;
@@ -295,25 +322,27 @@
     title.trim() !== '' && year !== '' &&
     (mediaType === 'movie' || (season !== '' && episode !== ''));
 
-  async function handleSubmit() {
+  async function handleSubmit(force = false) {
     if (!canSubmit || !selectedImdb || !selectedFile) return;
     if (videoDuration > 0 && totalCutDuration >= videoDuration - 0.5) {
-      submitError = 'All content is marked as ads — nothing to keep.'; return;
+      submitError = 'All content is marked — nothing to keep.'; return;
     }
-    submitting = true; submitError = '';
+    submitting = true; submitError = ''; conflictPath = null;
     try {
       const { jobId } = await startCutImport({
-        filename: selectedFile, segments: adSegments,
+        filename: selectedFile, segments: derivedAdSegments,
         title: title.trim(), year: Number(year), imdbId: selectedImdb.imdbId, mediaType,
         seriesTitle: seriesTitle.trim() || undefined,
         season:      season      !== '' ? Number(season)      : undefined,
         episode:     episode     !== '' ? Number(episode)     : undefined,
         episodeTitle: episodeTitle.trim() || undefined,
+        force,
       });
       dispatch('job', { jobId });
-      adSegments = []; pendingStart = null;
+      markers = [];
     } catch (e: any) {
-      submitError = e.message ?? 'Failed';
+      if (e instanceof ConflictError) conflictPath = e.existingPath;
+      else submitError = e.message ?? 'Failed';
     } finally { submitting = false; }
   }
 </script>
@@ -390,11 +419,14 @@
     ></video>
 
     <!-- Centre state overlays (loading / error / play hint) -->
+    {#if bridgeFrameUrl && !videoLoaded}
+      <img class="bridge-frame" src={bridgeFrameUrl} alt="" />
+    {/if}
     {#if videoError}
       <div class="ov-center ov-error">{videoError}</div>
-    {:else if !videoLoaded}
+    {:else if !videoLoaded && !bridgeFrameUrl}
       <div class="ov-center ov-loading">Loading…</div>
-    {:else if !playing}
+    {:else if !playing && videoLoaded}
       <!-- svelte-ignore a11y-click-events-have-key-events -->
       <!-- svelte-ignore a11y-no-static-element-interactions -->
       <div class="ov-center ov-play" on:click={togglePlay}>
@@ -427,22 +459,48 @@
         {#each keepRegions as r}
           <div class="tl-region keep" style="left:{pct(r.start)};width:{wPct(r.start,r.end)}"></div>
         {/each}
-        {#each adSegments as s}
+        {#each derivedAdSegments as s}
           <div class="tl-region cut" style="left:{pct(s.start)};width:{wPct(s.start,s.end)}"></div>
         {/each}
-        {#if pendingStart !== null}
-          <div class="tl-marker orange" style="left:{pct(pendingStart)}"></div>
-        {/if}
+        {#each markers as m, i}
+          <div class="tl-marker-hit" style="left:{pct(m)}" title="{formatSecs(m)}">
+            <div class="tl-marker-line" class:even={i % 2 === 0}></div>
+          </div>
+        {/each}
         <div class="tl-marker blue" style="left:{playedPct}%">
           <div class="tl-thumb"></div>
         </div>
+
+        <!-- Filmstrip preview above playhead -->
+        {#if videoDuration > 0 && selectedFile}
+          <!-- svelte-ignore a11y-click-events-have-key-events -->
+          <!-- svelte-ignore a11y-no-static-element-interactions -->
+          <div class="filmstrip" style="left:{pct(filmstripTime)}" on:click|stopPropagation>
+            {#each filmstripOffsets as offset}
+              {@const ft = Math.max(0, Math.min(videoDuration, filmstripTime + offset / fps))}
+              {@const inCut = derivedAdSegments.some(s => ft >= s.start && ft <= s.end)}
+              <!-- svelte-ignore a11y-click-events-have-key-events -->
+              <!-- svelte-ignore a11y-no-static-element-interactions -->
+              <div
+                class="fstrip-cell"
+                class:current={offset === 0}
+                class:in-cut={inCut}
+                on:click={() => seekFilmstripFrame(ft)}
+                title="{formatTimecode(ft)}"
+              >
+                <img src={frameUrl(selectedFile, ft)} alt="" />
+                <span class="fstrip-off">{offset > 0 ? '+' : ''}{offset}</span>
+              </div>
+            {/each}
+          </div>
+        {/if}
       </div>
 
       <!-- Transport + time row -->
       <div class="ctrl-row">
         <div class="ctrl-transport">
-          <button class="cb" on:click={() => skip(-30)} title="−30 s (←)">
-            <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M12 5V2L8 6l4 4V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/><text x="12" y="14.5" text-anchor="middle" font-size="5" fill="currentColor">30</text></svg>
+          <button class="cb" on:click={() => skip(-5)} title="−5 s (←)">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M12 5V2L8 6l4 4V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/><text x="12" y="14.5" text-anchor="middle" font-size="5" fill="currentColor">5</text></svg>
           </button>
           <button class="cb" on:click={() => stepFrame(-1)} title="Previous frame (,)" disabled={!videoLoaded}>
             <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
@@ -457,8 +515,8 @@
           <button class="cb" on:click={() => stepFrame(1)} title="Next frame (.)" disabled={!videoLoaded}>
             <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
           </button>
-          <button class="cb" on:click={() => skip(30)} title="+30 s (→)">
-            <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M12 5V2l4 4-4 4V7c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6h2c0 4.42-3.58 8-8 8s-8-3.58-8-8 3.58-8 8-8z"/><text x="12" y="14.5" text-anchor="middle" font-size="5" fill="currentColor">30</text></svg>
+          <button class="cb" on:click={() => skip(10)} title="+10 s (→)">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M12 5V2l4 4-4 4V7c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6h2c0 4.42-3.58 8-8 8s-8-3.58-8-8 3.58-8 8-8z"/><text x="12" y="14.5" text-anchor="middle" font-size="5" fill="currentColor">10</text></svg>
           </button>
         </div>
 
@@ -468,6 +526,11 @@
         </div>
 
         <div class="ctrl-right">
+          <div class="strip-n-ctrl" title="Filmstrip frames on each side">
+            <button class="cb cb-xs" on:click={() => filmstripN = Math.max(1, filmstripN - 1)}>−</button>
+            <span class="strip-n-val">{filmstripN}f</span>
+            <button class="cb cb-xs" on:click={() => filmstripN = Math.min(10, filmstripN + 1)}>+</button>
+          </div>
           <button class="cb" on:click={toggleMute} title="Mute/Unmute">
             {#if muted}
               <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3 3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4 9.91 6.09 12 8.18V4z"/></svg>
@@ -487,27 +550,14 @@
         </div>
       </div>
 
-      <!-- Mark In / Out row -->
+      <!-- Marker row -->
       <div class="mark-row">
-        <button
-          class="mark-btn"
-          class:active={pendingStart !== null}
-          on:click={markIn}
-          title="Mark In (I)"
-        >
-          {pendingStart !== null ? `[ ${formatSecs(pendingStart)}` : '[ Mark In'}
+        <button class="mark-btn" on:click={addMarker} title="Add Marker (M)" disabled={!videoLoaded}>
+          + Marker
         </button>
-        <button
-          class="mark-btn"
-          on:click={markOut}
-          disabled={pendingStart === null}
-          title="Mark Out (O)"
-        >
-          Mark Out ]
-        </button>
-        {#if adSegments.length > 0}
+        {#if markers.length > 0}
           <span class="cut-summary">
-            {adSegments.length} ad block{adSegments.length !== 1 ? 's' : ''} · {formatSecs(totalCutDuration)} removed
+            {markers.length} marker{markers.length !== 1 ? 's' : ''} · {formatSecs(totalCutDuration)} cut
           </span>
         {/if}
       </div>
@@ -521,18 +571,24 @@
           <button class="cb meta-x" on:click={() => showMetadata = false}>✕</button>
         </div>
 
-        {#if adSegments.length > 0}
+        {#if markers.length > 0}
           <div class="meta-sec">
-            <p class="meta-sec-label">Ad Segments</p>
+            <p class="meta-sec-label">Markers — click timeline line to remove</p>
             <table class="seg-table">
-              <thead><tr><th>In</th><th>Out</th><th>Duration</th><th></th></tr></thead>
+              <thead><tr><th>#</th><th>Time</th><th>After</th><th></th></tr></thead>
               <tbody>
-                {#each adSegments as s, i}
+                {#each markers as m, i}
                   <tr>
-                    <td>{formatSecs(s.start)}</td>
-                    <td>{formatSecs(s.end)}</td>
-                    <td>{formatSecs(s.end - s.start)}</td>
-                    <td><button class="del-btn" on:click={() => removeSegment(i)}>✕</button></td>
+                    <td>{i + 1}</td>
+                    <td>{formatSecs(m)}</td>
+                    <td>
+                      {#if i % 2 === 0}
+                        <span class="badge keep">keep</span>
+                      {:else}
+                        <span class="badge cut">cut</span>
+                      {/if}
+                    </td>
+                    <td><button class="del-btn" on:click={() => removeMarker(i)}>✕</button></td>
                   </tr>
                 {/each}
               </tbody>
@@ -558,12 +614,23 @@
           </div>
         {/if}
 
-        {#if submitError}
-          <p class="msg error">{submitError}</p>
+        {#if conflictPath}
+          <div class="conflict-box">
+            <p class="conflict-msg">Already exists in library:</p>
+            <p class="conflict-path">{conflictPath}</p>
+            <div class="conflict-actions">
+              <button class="btn-primary conflict-overwrite" on:click={() => handleSubmit(true)}>Overwrite</button>
+              <button class="btn-secondary" on:click={() => conflictPath = null}>Cancel</button>
+            </div>
+          </div>
+        {:else}
+          {#if submitError}
+            <p class="msg error">{submitError}</p>
+          {/if}
+          <button class="btn-primary btn-submit" disabled={!canSubmit} on:click={() => handleSubmit()}>
+            {submitting ? 'Starting…' : markers.length > 0 ? 'Cut & Transcode' : 'Transcode'}
+          </button>
         {/if}
-        <button class="btn-primary btn-submit" disabled={!canSubmit} on:click={handleSubmit}>
-          {submitting ? 'Starting…' : adSegments.length > 0 ? 'Cut & Transcode' : 'Transcode'}
-        </button>
       </div>
     {/if}
 
@@ -650,6 +717,14 @@
     cursor: pointer;
   }
 
+  /* Bridge frame — shown while stream reloads after a filmstrip seek */
+  .bridge-frame {
+    position: absolute; inset: 0; z-index: 1;
+    width: 100%; height: 100%; object-fit: contain;
+    pointer-events: none;
+    background: #000;
+  }
+
   /* Centre overlays */
   .ov-center {
     position: absolute; inset: 0; z-index: 2;
@@ -705,14 +780,14 @@
   .tl-region { position: absolute; top: 0; height: 100%; pointer-events: none; border-radius: 4px; }
   .tl-region.keep { background: rgba(34,197,94,0.55); }
   .tl-region.cut  { background: rgba(239,68,68,0.65); }
+  /* Playhead */
   .tl-marker {
     position: absolute; top: 50%;
     height: 18px; width: 2px;
     transform: translateX(-1px) translateY(-50%);
     pointer-events: none;
   }
-  .tl-marker.blue   { background: #3b82f6; }
-  .tl-marker.orange { background: #f97316; }
+  .tl-marker.blue { background: #3b82f6; }
   .tl-thumb {
     position: absolute; top: 50%; left: 50%;
     transform: translate(-50%, -50%);
@@ -720,6 +795,22 @@
     background: #3b82f6; border-radius: 50%;
     border: 2px solid #fff; box-shadow: 0 0 5px rgba(0,0,0,0.6);
   }
+
+  /* User markers */
+  .tl-marker-hit {
+    position: absolute; top: 0; bottom: 0;
+    width: 14px; transform: translateX(-7px);
+    z-index: 3;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .tl-marker-line {
+    width: 2px; height: 100%;
+    background: #facc15;
+    border-radius: 1px;
+    pointer-events: none;
+    transition: width 0.1s, background 0.1s;
+  }
+  .tl-marker-line.even { background: #34d399; }
 
   /* Control row */
   .ctrl-row { display: flex; align-items: center; gap: 0.4rem; }
@@ -772,7 +863,6 @@
     transition: border-color 0.15s, color 0.15s, background 0.15s;
   }
   .mark-btn:hover:not(:disabled) { border-color: rgba(255,255,255,0.5); color: #fff; }
-  .mark-btn.active { border-color: #f97316; color: #fb923c; background: rgba(249,115,22,0.15); }
   .mark-btn:disabled { opacity: 0.3; cursor: not-allowed; }
   .cut-summary { font-size: 0.75rem; color: #fca5a5; font-weight: 600; margin-left: auto; white-space: nowrap; }
 
@@ -812,6 +902,9 @@
   .seg-table td { padding: 0.28rem 0.4rem; color: var(--text); font-variant-numeric: tabular-nums; font-family: ui-monospace, monospace; border-bottom: 1px solid var(--border); }
   .del-btn { background: none; border: none; color: var(--text-muted); font-size: 0.75rem; padding: 0.1rem 0.3rem; border-radius: 3px; cursor: pointer; transition: color 0.15s; }
   .del-btn:hover { color: var(--error); }
+  .badge { font-size: 0.65rem; font-weight: 700; padding: 0.1rem 0.4rem; border-radius: 3px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .badge.keep { background: rgba(34,197,94,0.18); color: #16a34a; }
+  .badge.cut  { background: rgba(239,68,68,0.15); color: #dc2626; }
 
   /* Output path */
   .preview-path {
@@ -825,4 +918,76 @@
   .preview-value { font-family: ui-monospace, monospace; color: var(--text); word-break: break-all; }
 
   .btn-submit { width: calc(100% - 1.8rem); margin: 0.75rem 0.9rem; padding: 0.6rem; font-size: 0.95rem; }
+
+  .conflict-box {
+    margin: 0.75rem 0.9rem;
+    padding: 0.65rem 0.75rem;
+    border: 1px solid #f87171;
+    border-left: 3px solid #ef4444;
+    border-radius: 6px;
+    background: rgba(239,68,68,0.06);
+    display: flex; flex-direction: column; gap: 0.35rem;
+  }
+  .conflict-msg { margin: 0; font-size: 0.78rem; font-weight: 700; color: #dc2626; }
+  .conflict-path { margin: 0; font-size: 0.7rem; font-family: ui-monospace, monospace; color: var(--text); word-break: break-all; }
+  .conflict-actions { display: flex; gap: 0.5rem; margin-top: 0.2rem; }
+  .conflict-overwrite { background: #dc2626; font-size: 0.82rem; padding: 0.35rem 0.8rem; }
+  .conflict-overwrite:hover { background: #b91c1c; }
+
+  /* ── Filmstrip ─────────────────────────────────────────────────────────── */
+  .filmstrip {
+    position: absolute;
+    bottom: calc(100% + 10px);
+    transform: translateX(-50%);
+    display: flex;
+    gap: 2px;
+    pointer-events: all;
+    z-index: 12;
+    filter: drop-shadow(0 2px 14px rgba(0,0,0,0.95));
+  }
+  .fstrip-cell {
+    position: relative;
+    width: 80px;
+    height: 45px;
+    background: #111827;
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 2px;
+    overflow: hidden;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: border-color 0.1s, transform 0.1s;
+  }
+  .fstrip-cell:hover { border-color: rgba(255,255,255,0.65); transform: scale(1.06); z-index: 1; }
+  .fstrip-cell.current { border: 2px solid #3b82f6; }
+  .fstrip-cell.in-cut::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: rgba(239, 68, 68, 0.30);
+    pointer-events: none;
+  }
+  .fstrip-cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .fstrip-off {
+    position: absolute;
+    bottom: 1px;
+    right: 2px;
+    font-size: 9px;
+    color: rgba(255,255,255,0.55);
+    font-family: ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    pointer-events: none;
+  }
+
+  /* Filmstrip N control */
+  .strip-n-ctrl {
+    display: flex;
+    align-items: center;
+    gap: 0.15rem;
+    border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 4px;
+    padding: 0 0.1rem;
+  }
+  .cb-xs { padding: 0.15rem 0.25rem; font-size: 0.7rem; }
+  .strip-n-val { font-size: 0.7rem; font-variant-numeric: tabular-nums; color: rgba(255,255,255,0.65); min-width: 1.6rem; text-align: center; }
 </style>

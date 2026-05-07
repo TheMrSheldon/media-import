@@ -5,7 +5,7 @@
   import RecordingQueue from './components/RecordingQueue.svelte';
   import JobQueue from './components/JobQueue.svelte';
   import CutEditor from './components/CutEditor.svelte';
-  import { startImport, recordTV, type ImdbResult, type MediathekResult, type TVGuideResult } from './api.js';
+  import { startImport, recordTV, ConflictError, type ImdbResult, type MediathekResult, type TVGuideResult } from './api.js';
 
   let page: 'import' | 'cut' = 'import';
 
@@ -31,6 +31,7 @@
   let submitting = false;
   let submitError = '';
   let submitSuccess = '';
+  let conflictPath: string | null = null;
   let jobQueue: JobQueue;
 
   function handleMediathekSelect(result: MediathekResult, url: string) {
@@ -138,11 +139,12 @@
     imdbQuery = '';
   }
 
-  async function handleSubmit() {
+  async function handleSubmit(force = false) {
     if (!canSubmit || !selectedImdb) return;
     submitting = true;
     submitError = '';
     submitSuccess = '';
+    conflictPath = null;
     try {
       if (tvEvent) {
         let recordingTitle: string;
@@ -174,13 +176,15 @@
           season: season !== '' ? Number(season) : undefined,
           episode: episode !== '' ? Number(episode) : undefined,
           episodeTitle: episodeTitle.trim() || undefined,
+          force,
         });
         await jobQueue.addJob(jobId);
         videoUrl = '';
         resetForm();
       }
     } catch (e: any) {
-      submitError = e.message ?? 'Failed';
+      if (e instanceof ConflictError) conflictPath = e.existingPath;
+      else submitError = e.message ?? 'Failed';
     } finally {
       submitting = false;
     }
@@ -248,13 +252,24 @@
     {/if}
 
     <!-- Submit -->
-    {#if submitError}
-      <p class="submit-error">{submitError}</p>
+    {#if conflictPath}
+      <div class="conflict-box">
+        <p class="conflict-msg">Already exists in library:</p>
+        <p class="conflict-path">{conflictPath}</p>
+        <div class="conflict-actions">
+          <button class="btn-primary conflict-overwrite" on:click={() => handleSubmit(true)}>Overwrite</button>
+          <button class="btn-secondary" on:click={() => conflictPath = null}>Cancel</button>
+        </div>
+      </div>
+    {:else}
+      {#if submitError}
+        <p class="submit-error">{submitError}</p>
+      {/if}
+      {#if submitSuccess}
+        <p class="submit-success">{submitSuccess}</p>
+      {/if}
     {/if}
-    {#if submitSuccess}
-      <p class="submit-success">{submitSuccess}</p>
-    {/if}
-    <button class="btn-primary btn-import" disabled={!canSubmit} on:click={handleSubmit}>
+    <button class="btn-primary btn-import" disabled={!canSubmit} on:click={() => handleSubmit()}>
       {#if submitting}
         {tvEvent ? 'Scheduling…' : 'Starting…'}
       {:else}
@@ -358,6 +373,20 @@
   .btn-import { width: 100%; padding: 0.65rem; font-size: 1rem; }
   .submit-error { color: var(--error); font-size: 0.875rem; margin: 0; }
   .submit-success { color: #16a34a; font-size: 0.875rem; margin: 0; font-weight: 600; }
+
+  .conflict-box {
+    padding: 0.65rem 0.75rem;
+    border: 1px solid #f87171;
+    border-left: 3px solid #ef4444;
+    border-radius: 6px;
+    background: rgba(239,68,68,0.06);
+    display: flex; flex-direction: column; gap: 0.35rem;
+  }
+  .conflict-msg { margin: 0; font-size: 0.78rem; font-weight: 700; color: #dc2626; }
+  .conflict-path { margin: 0; font-size: 0.75rem; font-family: ui-monospace, 'Cascadia Code', monospace; color: var(--text); word-break: break-all; }
+  .conflict-actions { display: flex; gap: 0.5rem; margin-top: 0.2rem; }
+  .conflict-overwrite { background: #dc2626; }
+  .conflict-overwrite:hover { background: #b91c1c; }
 
   .preview-path {
     display: flex;

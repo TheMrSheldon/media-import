@@ -59,6 +59,7 @@ export interface ImportRequest {
   season?: number;
   episode?: number;
   episodeTitle?: string;
+  force?: boolean;
 }
 
 export interface Job {
@@ -85,6 +86,16 @@ export interface CutImportRequest {
   season?: number;
   episode?: number;
   episodeTitle?: string;
+  force?: boolean;
+}
+
+export class ConflictError extends Error {
+  conflict = true;
+  existingPath: string;
+  constructor(path: string) {
+    super(`File already exists in the library`);
+    this.existingPath = path;
+  }
 }
 
 export interface UncutFile { name: string; mtime: number; size: number; }
@@ -112,9 +123,14 @@ export async function startCutImport(req: CutImportRequest): Promise<{ jobId: st
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
+    if (res.status === 409) throw new ConflictError(err.existingPath ?? '');
     throw new Error(err.error ?? res.statusText);
   }
   return res.json();
+}
+
+export function frameUrl(filename: string, t: number): string {
+  return `${BASE}/api/cut/frame/${encodeURIComponent(filename)}?t=${t.toFixed(6)}`;
 }
 
 export function uncutStreamUrl(filename: string, seek = 0): string {
@@ -177,6 +193,7 @@ export async function startImport(req: ImportRequest): Promise<{ jobId: string }
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
+    if (res.status === 409) throw new ConflictError(err.existingPath ?? '');
     throw new Error(err.error ?? res.statusText);
   }
   return res.json();
