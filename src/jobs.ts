@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import { randomUUID } from 'crypto';
-import { readFile, writeFile, mkdir } from 'fs/promises';
+import { readFile, writeFile, mkdir, unlink, access } from 'fs/promises';
 import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { config } from './config.js';
@@ -16,6 +16,7 @@ export interface Job {
   downloadedBytes: number | null;
   command: string | null;
   createdAt: number;
+  downloadable?: boolean;
 }
 
 export interface ImportRequest {
@@ -33,6 +34,8 @@ export interface ImportRequest {
 const jobs = new Map<string, Job>();
 const subscribers = new Map<string, Response[]>();
 const logs = new Map<string, string[]>(); // not persisted — lost on restart
+// Temp files that belong to done audiobook jobs, cleaned up on deleteJob
+const pendingFiles = new Map<string, string>();
 
 const JOBS_FILE = join(config.dataDir, 'jobs.json');
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -68,10 +71,21 @@ export async function initJobs() {
     const loaded = JSON.parse(raw) as Job[];
     const terminal: JobPhase[] = ['done', 'error'];
     for (const job of loaded) {
-      // Any job that was in-flight when the server stopped can never complete now
       if (!terminal.includes(job.phase)) {
         job.phase = 'error';
         job.message = 'Interrupted by server restart';
+      }
+      // For done jobs, check if the output M4B still exists regardless of the
+      // persisted downloadable flag (it may have been cleared by a previous restart).
+      if (job.phase === 'done') {
+        const filePath = join(config.tempDir, `${job.id}_output.m4b`);
+        const exists = await access(filePath).then(() => true).catch(() => false);
+        if (exists) {
+          pendingFiles.set(job.id, filePath);
+          job.downloadable = true;
+        } else {
+          job.downloadable = false;
+        }
       }
       jobs.set(job.id, job);
       subscribers.set(job.id, []);
@@ -99,6 +113,17 @@ export function createJob(title: string): Job {
   return job;
 }
 
+// Mark a completed job as having a downloadable file.
+// The file is automatically cleaned up when the job is deleted.
+export function setPendingFile(id: string, filePath: string): void {
+  pendingFiles.set(id, filePath);
+  updateJob(id, { downloadable: true });
+}
+
+export function getPendingFile(id: string): string | undefined {
+  return pendingFiles.get(id);
+}
+
 export function getJob(id: string): Job | undefined {
   return jobs.get(id);
 }
@@ -119,6 +144,11 @@ export function getLog(id: string): string {
 
 export function deleteJob(id: string): boolean {
   if (!jobs.has(id)) return false;
+  const filePath = pendingFiles.get(id);
+  if (filePath) {
+    pendingFiles.delete(id);
+    unlink(filePath).catch(() => {});
+  }
   jobs.delete(id);
   subscribers.delete(id);
   logs.delete(id);
@@ -151,7 +181,7 @@ function emit(id: string) {
   const job = jobs.get(id);
   const list = subscribers.get(id);
   if (!job || !list) return;
-  const data = JSON.stringify({ phase: job.phase, percent: job.percent, message: job.message, downloadedBytes: job.downloadedBytes });
+  const data = JSON.stringify({ phase: job.phase, percent: job.percent, message: job.message, downloadedBytes: job.downloadedBytes, downloadable: job.downloadable ?? false });
   for (const res of list) {
     res.write(`data: ${data}\n\n`);
   }

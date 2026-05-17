@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import https from 'https';
+import { problem } from '../problem.js';
 
 const router = Router();
 
@@ -11,7 +12,7 @@ router.post('/', (req: Request, res: Response) => {
   };
 
   if (!query) {
-    res.status(400).json({ error: 'query is required' });
+    problem(res, 400, '/problems/missing-fields', 'Missing required fields', 'query is required');
     return;
   }
 
@@ -43,13 +44,14 @@ router.post('/', (req: Request, res: Response) => {
         const parsed = JSON.parse(data);
         res.json(parsed);
       } catch {
-        res.status(502).json({ error: 'Invalid response from MediathekViewWeb' });
+        problem(res, 502, '/problems/upstream-error', 'Invalid upstream response',
+          'MediathekViewWeb returned an unparseable response');
       }
     });
   });
 
   proxyReq.on('error', (err) => {
-    res.status(502).json({ error: err.message });
+    problem(res, 502, '/problems/upstream-error', 'Upstream request failed', err.message);
   });
 
   proxyReq.write(body);

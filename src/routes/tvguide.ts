@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { tvhGet } from '../services/tvheadend.js';
+import { problem } from '../problem.js';
 
 const router = Router();
 
@@ -21,7 +22,7 @@ interface TVHEvent {
 router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   const q = (req.query.q as string | undefined)?.trim();
   if (!q) {
-    res.status(400).json({ error: 'q is required' });
+    problem(res, 400, '/problems/missing-fields', 'Missing required fields', 'q is required');
     return;
   }
 

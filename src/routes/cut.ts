@@ -9,15 +9,16 @@ import { transcodeWithPreset } from '../services/transcoder.js';
 import { presetToFfmpeg } from '../services/preset-parser.js';
 import { moveToLibrary, destExists } from '../services/filemanager.js';
 import { activePreset } from '../services/active-preset.js';
+import { problem } from '../problem.js';
 
 const router = Router();
 
 const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.ts', '.avi', '.mov', '.m4v', '.wmv']);
 
-
 function guardUncutPath(res: Response): boolean {
   if (!config.uncutPath) {
-    res.status(503).json({ error: 'MEDIA_IMPORT_UNCUT_PATH not configured' });
+    problem(res, 503, '/problems/not-configured', 'Service not configured',
+      'MEDIA_IMPORT_UNCUT_PATH is not set');
     return false;
   }
   return true;
@@ -53,7 +54,11 @@ router.get('/duration/:encodedFilename', async (req: Request, res: Response, nex
   if (!guardUncutPath(res)) return;
   const filename = decodeURIComponent(req.params.encodedFilename);
   const filePath = resolveFilePath(filename);
-  if (!filePath) { res.status(400).json({ error: 'Invalid filename' }); return; }
+  if (!filePath) {
+    problem(res, 400, '/problems/invalid-parameter', 'Invalid filename',
+      'The filename contains path traversal characters or is otherwise invalid');
+    return;
+  }
   try {
     const duration = await getVideoDuration(filePath);
     res.json({ duration });
@@ -62,7 +67,6 @@ router.get('/duration/:encodedFilename', async (req: Request, res: Response, nex
   }
 });
 
-// GET /api/cut/frame/:filename?t=<seconds>  — extract a single JPEG frame, cached
 router.get('/frame/:encodedFilename', (req: Request, res: Response) => {
   if (!guardUncutPath(res)) return;
   const filename = decodeURIComponent(req.params.encodedFilename);
@@ -72,7 +76,6 @@ router.get('/frame/:encodedFilename', (req: Request, res: Response) => {
   const t = parseFloat(req.query.t as string);
   if (isNaN(t) || t < 0) { res.status(400).end(); return; }
 
-  // Two-pass seek: fast keyframe seek to (t-2s), then accurate decode to t
   const preseek = Math.max(0, t - 2);
   const fineseek = parseFloat((t - preseek).toFixed(6));
   const args = [
@@ -95,15 +98,13 @@ router.get('/frame/:encodedFilename', (req: Request, res: Response) => {
   req.on('close', () => ff.kill());
 });
 
-// GET /api/cut/stream/:filename?seek=<seconds>
-// Transcodes on the fly from the given seek position — only the portion the client
-// downloads is transcoded.  -ss before -i does a fast keyframe seek.
 router.get('/stream/:encodedFilename', (req: Request, res: Response) => {
   if (!guardUncutPath(res)) return;
   const filename = decodeURIComponent(req.params.encodedFilename);
   const filePath = resolveFilePath(filename);
   if (!filePath) {
-    res.status(400).json({ error: 'Invalid filename' });
+    problem(res, 400, '/problems/invalid-parameter', 'Invalid filename',
+      'The filename contains path traversal characters or is otherwise invalid');
     return;
   }
 
@@ -139,22 +140,25 @@ interface CutStartBody {
   force?: boolean;
 }
 
-router.post('/start', async (req: Request, res: Response) => {
+router.post('/jobs', async (req: Request, res: Response) => {
   if (!guardUncutPath(res)) return;
 
   const body = req.body as CutStartBody;
   if (!body.filename || !body.title || !body.year || !body.imdbId || !body.mediaType) {
-    res.status(400).json({ error: 'Missing required fields: filename, title, year, imdbId, mediaType' });
+    problem(res, 400, '/problems/missing-fields', 'Missing required fields',
+      'filename, title, year, imdbId, and mediaType are required');
     return;
   }
   if (body.mediaType === 'series' && (!body.season || !body.episode)) {
-    res.status(400).json({ error: 'season and episode are required for series' });
+    problem(res, 400, '/problems/missing-fields', 'Missing required fields',
+      'season and episode are required for series');
     return;
   }
 
   const filePath = resolveFilePath(body.filename);
   if (!filePath) {
-    res.status(400).json({ error: 'Invalid filename' });
+    problem(res, 400, '/problems/invalid-parameter', 'Invalid filename',
+      'The filename contains path traversal characters or is otherwise invalid');
     return;
   }
 
@@ -165,7 +169,8 @@ router.post('/start', async (req: Request, res: Response) => {
       season: body.season, episode: body.episode, episodeTitle: body.episodeTitle,
     });
     if (existing) {
-      res.status(409).json({ conflict: true, existingPath: existing });
+      problem(res, 409, '/problems/conflict', 'File already exists',
+        'A file already exists at this path in the library', { existingPath: existing });
       return;
     }
   }
@@ -176,7 +181,7 @@ router.post('/start', async (req: Request, res: Response) => {
       : `${body.title} (${body.year})`;
 
   const job = createJob(displayTitle);
-  res.json({ jobId: job.id });
+  res.status(201).json({ jobId: job.id });
 
   runCutPipeline(job.id, filePath, body).catch((err: Error) => {
     updateJob(job.id, { phase: 'error', message: err.message });

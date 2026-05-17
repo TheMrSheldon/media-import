@@ -4,10 +4,36 @@
   import MediaForm from './components/MediaForm.svelte';
   import RecordingQueue from './components/RecordingQueue.svelte';
   import JobQueue from './components/JobQueue.svelte';
+  import { onMount } from 'svelte';
   import CutEditor from './components/CutEditor.svelte';
+  import AudiobookView from './components/AudiobookView.svelte';
   import { startImport, recordTV, ConflictError, type ImdbResult, type MediathekResult, type TVGuideResult } from './api.js';
 
-  let page: 'import' | 'cut' = 'import';
+  type Page = 'import' | 'cut' | 'audiobook';
+
+  const BASE = ((window as unknown as Record<string, unknown>)._basePath as string ?? '/').replace(/\/$/, '');
+
+  function pageFromPath(): Page {
+    const sub = window.location.pathname.slice(BASE.length) || '/';
+    if (sub.startsWith('/cut')) return 'cut';
+    if (sub.startsWith('/audiobook')) return 'audiobook';
+    return 'import';
+  }
+
+  let page: Page = pageFromPath();
+
+  function navigate(p: Page) {
+    if (page === p) return;
+    page = p;
+    const path = p === 'import' ? (BASE || '/') : `${BASE}/${p}`;
+    history.pushState({ page: p }, '', path);
+  }
+
+  onMount(() => {
+    const onPop = () => { page = pageFromPath(); };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  });
 
   // Source
   let videoUrl = '';
@@ -199,8 +225,9 @@
         <p class="subtitle">Download, transcode, and import to Jellyfin</p>
       </div>
       <nav class="page-nav">
-        <button class="nav-btn" class:active={page === 'import'} on:click={() => page = 'import'}>Import</button>
-        <button class="nav-btn" class:active={page === 'cut'} on:click={() => page = 'cut'}>Cut Editor</button>
+        <button class="nav-btn" class:active={page === 'import'} on:click={() => navigate('import')}>Import</button>
+        <button class="nav-btn" class:active={page === 'cut'} on:click={() => navigate('cut')}>Cut Editor</button>
+        <button class="nav-btn" class:active={page === 'audiobook'} on:click={() => navigate('audiobook')}>Audiobook</button>
       </nav>
     </div>
   </header>
@@ -208,6 +235,10 @@
   {#if page === 'cut'}
     <div class="card">
       <CutEditor on:job={(e) => jobQueue?.addJob(e.detail.jobId)} />
+    </div>
+  {:else if page === 'audiobook'}
+    <div class="card">
+      <AudiobookView on:job={(e) => jobQueue?.addJob(e.detail.jobId)} />
     </div>
   {:else}
   <div class="card">
@@ -280,10 +311,9 @@
   {/if}
 
   {#if page === 'import'}
-    <!-- TVHeadend recording queue -->
     <RecordingQueue />
-
-    <!-- Job queue -->
+    <JobQueue bind:this={jobQueue} />
+  {:else if page === 'audiobook'}
     <JobQueue bind:this={jobQueue} />
   {/if}
 </main>

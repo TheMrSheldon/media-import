@@ -1,13 +1,14 @@
 import { Router, Request, Response } from 'express';
 import http from 'http';
 import https from 'https';
+import { problem } from '../problem.js';
 
 const router = Router();
 
 router.get('/', (req: Request, res: Response) => {
   const url = req.query.url as string | undefined;
   if (!url) {
-    res.status(400).json({ error: 'url is required' });
+    problem(res, 400, '/problems/missing-fields', 'Missing required fields', 'url is required');
     return;
   }
 

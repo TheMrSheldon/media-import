@@ -8,6 +8,7 @@ import { transcodeWithPreset } from '../services/transcoder.js';
 import { presetToFfmpeg } from '../services/preset-parser.js';
 import { moveToLibrary, destExists } from '../services/filemanager.js';
 import { activePreset } from '../services/active-preset.js';
+import { problem } from '../problem.js';
 
 const router = Router();
 
@@ -15,19 +16,22 @@ router.post('/', async (req: Request, res: Response) => {
   const body = req.body as ImportRequest & { force?: boolean };
 
   if (!body.videoUrl || !body.title || !body.year || !body.imdbId || !body.mediaType) {
-    res.status(400).json({ error: 'Missing required fields: videoUrl, title, year, imdbId, mediaType' });
+    problem(res, 400, '/problems/missing-fields', 'Missing required fields',
+      'videoUrl, title, year, imdbId, and mediaType are required');
     return;
   }
 
   if (body.mediaType === 'series' && (!body.season || !body.episode)) {
-    res.status(400).json({ error: 'season and episode are required for series' });
+    problem(res, 400, '/problems/missing-fields', 'Missing required fields',
+      'season and episode are required for series');
     return;
   }
 
   if (!body.force) {
     const existing = await destExists(body);
     if (existing) {
-      res.status(409).json({ conflict: true, existingPath: existing });
+      problem(res, 409, '/problems/conflict', 'File already exists',
+        'A file already exists at this path in the library', { existingPath: existing });
       return;
     }
   }
@@ -38,7 +42,7 @@ router.post('/', async (req: Request, res: Response) => {
       : `${body.title} (${body.year})`;
 
   const job = createJob(displayTitle);
-  res.json({ jobId: job.id });
+  res.status(201).json({ jobId: job.id });
 
   runPipeline(job.id, body).catch((err: Error) => {
     updateJob(job.id, { phase: 'error', message: err.message });
@@ -55,19 +59,16 @@ async function runPipeline(jobId: string, req: ImportRequest): Promise<void> {
     const srcExt = extname(urlPath) || '.mp4';
     downloadPath = join(config.tempDir, `${jobId}_original${srcExt}`);
 
-    // Phase 1: Download
     updateJob(jobId, { phase: 'downloading', percent: 0, message: 'Downloading…' });
     const { receivedBytes } = await downloadFile(req.videoUrl, downloadPath, (pct, received) => {
       updateJob(jobId, { percent: pct, message: `Downloading… ${pct}%`, downloadedBytes: received });
     });
     updateJob(jobId, { downloadedBytes: receivedBytes });
 
-    // Phase 2: Transcode — build args from preset or fall back to built-in H.265 defaults
     const passLogBase = join(config.tempDir, `${jobId}_ffmpeg2pass`);
     const ffmpegJob = activePreset
       ? presetToFfmpeg(activePreset, downloadPath, join(config.tempDir, `${jobId}_transcoded.PLACEHOLDER`), passLogBase)
       : (() => {
-          // Built-in default: H.265 CRF 22
           const out = join(config.tempDir, `${jobId}_transcoded.mp4`);
           return {
             passes: [[
@@ -81,7 +82,6 @@ async function runPipeline(jobId: string, req: ImportRequest): Promise<void> {
           };
         })();
 
-    // Replace the PLACEHOLDER extension with the real output extension
     transcodePath = join(config.tempDir, `${jobId}_transcoded.${ffmpegJob.outputExt}`);
     for (let i = 0; i < ffmpegJob.passes.length; i++) {
       ffmpegJob.passes[i] = ffmpegJob.passes[i].map((arg) =>
@@ -89,7 +89,6 @@ async function runPipeline(jobId: string, req: ImportRequest): Promise<void> {
       );
     }
 
-    // Store the final-pass command for display in the UI
     const finalPassArgs = ffmpegJob.passes[ffmpegJob.passes.length - 1];
     updateJob(jobId, { command: `ffmpeg ${finalPassArgs.join(' ')}` });
 
@@ -98,12 +97,10 @@ async function runPipeline(jobId: string, req: ImportRequest): Promise<void> {
       updateJob(jobId, { percent: pct, message: `Transcoding… ${pct}%` });
     }, (line) => appendLog(jobId, line));
 
-    // Phase 3: Move to library
     updateJob(jobId, { phase: 'moving', percent: 100, message: 'Moving to library…' });
     const dest = await moveToLibrary(transcodePath, req);
 
     if (downloadPath) await unlink(downloadPath).catch(() => {});
-    // Clean up 2-pass log files if they exist
     await Promise.all([
       unlink(`${passLogBase}-0.log`).catch(() => {}),
       unlink(`${passLogBase}-0.log.mbtree`).catch(() => {}),

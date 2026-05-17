@@ -1,4 +1,4 @@
-import { mkdir, rename, access } from 'fs/promises';
+import { mkdir, rename, copyFile, unlink, access } from 'fs/promises';
 import { extname, join } from 'path';
 import { config } from '../config.js';
 import type { ImportRequest } from '../jobs.js';
@@ -50,6 +50,12 @@ export async function moveToLibrary(
   const { dir, file } = buildTargetPath(req, transcodedPath);
   await mkdir(dir, { recursive: true });
   const dest = join(dir, file);
-  await rename(transcodedPath, dest);
+  try {
+    await rename(transcodedPath, dest);
+  } catch (err: any) {
+    if (err.code !== 'EXDEV') throw err;
+    await copyFile(transcodedPath, dest);
+    await unlink(transcodedPath);
+  }
   return dest;
 }

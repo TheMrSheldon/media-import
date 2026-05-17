@@ -1,24 +1,24 @@
 import { Router, Request, Response } from 'express';
 import https from 'https';
+import { problem } from '../problem.js';
 
 const router = Router();
 
 interface ImdbSuggestion {
   id: string;
-  l: string;   // label / title
-  y?: number;  // year
-  q?: string;  // type (feature, TV series, etc.)
+  l: string;
+  y?: number;
+  q?: string;
   i?: { imageUrl: string; width: number; height: number };
 }
 
 router.get('/', (req: Request, res: Response) => {
   const q = (req.query.q as string | undefined)?.trim();
   if (!q) {
-    res.status(400).json({ error: 'q is required' });
+    problem(res, 400, '/problems/missing-fields', 'Missing required fields', 'q is required');
     return;
   }
 
-  // IMDB's internal suggestion endpoint — first letter + query
   const firstLetter = q[0].toLowerCase().replace(/[^a-z0-9]/, 'a');
   const encoded = encodeURIComponent(q.toLowerCase());
   const path = `/suggestion/${firstLetter}/${encoded}.json`;
@@ -48,13 +48,14 @@ router.get('/', (req: Request, res: Response) => {
           }));
         res.json(results);
       } catch {
-        res.status(502).json({ error: 'Invalid response from IMDB' });
+        problem(res, 502, '/problems/upstream-error', 'Invalid upstream response',
+          'IMDB returned an unparseable response');
       }
     });
   });
 
   proxyReq.on('error', (err) => {
-    res.status(502).json({ error: err.message });
+    problem(res, 502, '/problems/upstream-error', 'Upstream request failed', err.message);
   });
 
   proxyReq.end();
