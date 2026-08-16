@@ -27,6 +27,28 @@ function required(name: string): string {
   return val;
 }
 
+export interface UploadDestination {
+  label: string;
+  path: string;
+}
+
+// Format: "Label<path>;Label<path>", e.g. "Jim's Stuff</mount/mediaJim>;Jill's Stuff</mount/media/jill>"
+function parseUploadDestinations(raw: string | undefined): UploadDestination[] {
+  if (!raw) return [];
+  const destinations: UploadDestination[] = [];
+  for (const entry of raw.split(';')) {
+    const trimmed = entry.trim();
+    if (!trimmed) continue;
+    const m = trimmed.match(/^(.*)<(.*)>$/);
+    if (!m) {
+      console.error(`Ignoring malformed MEDIA_IMPORT_UPLOAD_DESTINATIONS entry: ${trimmed}`);
+      continue;
+    }
+    destinations.push({ label: m[1].trim(), path: m[2].trim() });
+  }
+  return destinations;
+}
+
 export const config = {
   port: parseInt(process.env.PORT ?? '3000', 10),
   basePath: (process.env.BASE_PATH ?? '/').replace(/\/+$/, '') || '/',
@@ -40,4 +62,5 @@ export const config = {
   tvheadendPass: process.env.MEDIA_IMPORT_TVHEADEND_PASS ?? '',
   tvheadendDvrUuid: process.env.MEDIA_IMPORT_TVHEADEND_DVR_UUID ?? '',
   uncutPath: process.env.MEDIA_IMPORT_UNCUT_PATH ?? '',
+  uploadDestinations: parseUploadDestinations(process.env.MEDIA_IMPORT_UPLOAD_DESTINATIONS),
 };

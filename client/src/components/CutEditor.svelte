@@ -2,11 +2,13 @@
   import { createEventDispatcher, onMount, onDestroy } from 'svelte';
   import {
     listUncutFiles, startCutImport, uncutStreamUrl, getUncutDuration,
-    searchImdb, formatBytes, formatDate, frameUrl, ConflictError,
-    type ImdbResult, type CutSegment, type UncutFile,
+    searchImdb, formatBytes, formatDate, frameUrl, ConflictError, getLibraryPaths,
+    type ImdbResult, type CutSegment, type UncutFile, type LibraryPaths,
   } from '../api.js';
+  import { buildPreviewPath } from '../lib/naming.js';
   import ImdbSelector from './ImdbSelector.svelte';
   import MediaForm from './MediaForm.svelte';
+  import ConflictBox from './ConflictBox.svelte';
 
   const dispatch = createEventDispatcher<{ job: { jobId: string } }>();
 
@@ -61,9 +63,12 @@
   let season: number | '' = '';
   let episode: number | '' = '';
   let episodeTitle = '';
+  let asFolder = false;
   let submitting = false;
   let submitError = '';
   let conflictPath: string | null = null;
+  let suggestedPath: string | undefined;
+  let libraryPaths: LibraryPaths | null = null;
 
   $: imdbQuery = title;
 
@@ -73,6 +78,7 @@
       loadImdbData(files);
     }
     catch (e: any) { filesError = e.message ?? 'Failed to load files'; }
+    try { libraryPaths = await getLibraryPaths(); } catch { /* ignore */ }
     document.addEventListener('keydown', handleKeydown);
   });
 
@@ -302,20 +308,12 @@
     else                            { mediaType = 'movie'; title = r.title; }
   }
 
-  function pad(n: number | ''): string { return String(n).padStart(2, '0'); }
-  function sanitize(s: string): string { return s.replace(/[<>:"/\\|?*\x00-\x1f]/g, '').trim(); }
+  $: libraryPath = mediaType === 'movie' ? libraryPaths?.movieBaseDir ?? null : libraryPaths?.seriesBaseDir ?? null;
 
-  $: previewPath = (() => {
-    if (!selectedImdb || !title.trim() || year === '') return null;
-    if (mediaType === 'movie') {
-      const name = sanitize(`${title.trim()} (${year}) [imdbid-${selectedImdb.imdbId}]`);
-      return `${name} / ${name}.mp4`;
-    }
-    const series = sanitize(seriesTitle.trim() || title.trim());
-    const epTag  = `S${pad(season || 1)}E${pad(episode || 1)}`;
-    const epSfx  = episodeTitle.trim() ? ` - ${sanitize(episodeTitle.trim())}` : '';
-    return `${sanitize(`${series} (${year})`)} / Season ${pad(season || 1)} / ${series} - ${epTag}${epSfx}.mp4`;
-  })();
+  $: previewPath = buildPreviewPath({
+    mediaType, title, year, imdbId: selectedImdb?.imdbId ?? '',
+    seriesTitle, season, episode, episodeTitle, asFolder, libraryPath,
+  });
 
   $: canSubmit =
     !submitting && selectedFile !== null && selectedImdb !== null &&
@@ -327,7 +325,7 @@
     if (videoDuration > 0 && totalCutDuration >= videoDuration - 0.5) {
       submitError = 'All content is marked — nothing to keep.'; return;
     }
-    submitting = true; submitError = ''; conflictPath = null;
+    submitting = true; submitError = ''; conflictPath = null; suggestedPath = undefined;
     try {
       const { jobId } = await startCutImport({
         filename: selectedFile, segments: derivedAdSegments,
@@ -336,12 +334,13 @@
         season:      season      !== '' ? Number(season)      : undefined,
         episode:     episode     !== '' ? Number(episode)     : undefined,
         episodeTitle: episodeTitle.trim() || undefined,
+        asFolder,
         force,
       });
       dispatch('job', { jobId });
       markers = [];
     } catch (e: any) {
-      if (e instanceof ConflictError) conflictPath = e.existingPath;
+      if (e instanceof ConflictError) { conflictPath = e.existingPath; suggestedPath = e.suggestedPath; }
       else submitError = e.message ?? 'Failed';
     } finally { submitting = false; }
   }
@@ -597,13 +596,14 @@
         {/if}
 
         <div class="meta-sec">
-          <ImdbSelector query={imdbQuery} selected={selectedImdb} onSelect={handleImdbSelect} />
+          <ImdbSelector query={imdbQuery} selected={selectedImdb} onSelect={handleImdbSelect} onClear={() => { selectedImdb = null; }} />
         </div>
 
         <div class="meta-sec">
           <MediaForm
             bind:mediaType bind:title bind:year
             bind:seriesTitle bind:season bind:episode bind:episodeTitle
+            bind:asFolder
           />
         </div>
 
@@ -615,13 +615,13 @@
         {/if}
 
         {#if conflictPath}
-          <div class="conflict-box">
-            <p class="conflict-msg">Already exists in library:</p>
-            <p class="conflict-path">{conflictPath}</p>
-            <div class="conflict-actions">
-              <button class="btn-primary conflict-overwrite" on:click={() => handleSubmit(true)}>Overwrite</button>
-              <button class="btn-secondary" on:click={() => conflictPath = null}>Cancel</button>
-            </div>
+          <div class="conflict-wrap">
+            <ConflictBox
+              existingPath={conflictPath}
+              {suggestedPath}
+              onContinue={() => handleSubmit(true)}
+              onCancel={() => { conflictPath = null; suggestedPath = undefined; }}
+            />
           </div>
         {:else}
           {#if submitError}
@@ -919,20 +919,7 @@
 
   .btn-submit { width: calc(100% - 1.8rem); margin: 0.75rem 0.9rem; padding: 0.6rem; font-size: 0.95rem; }
 
-  .conflict-box {
-    margin: 0.75rem 0.9rem;
-    padding: 0.65rem 0.75rem;
-    border: 1px solid #f87171;
-    border-left: 3px solid #ef4444;
-    border-radius: 6px;
-    background: rgba(239,68,68,0.06);
-    display: flex; flex-direction: column; gap: 0.35rem;
-  }
-  .conflict-msg { margin: 0; font-size: 0.78rem; font-weight: 700; color: #dc2626; }
-  .conflict-path { margin: 0; font-size: 0.7rem; font-family: ui-monospace, monospace; color: var(--text); word-break: break-all; }
-  .conflict-actions { display: flex; gap: 0.5rem; margin-top: 0.2rem; }
-  .conflict-overwrite { background: #dc2626; font-size: 0.82rem; padding: 0.35rem 0.8rem; }
-  .conflict-overwrite:hover { background: #b91c1c; }
+  .conflict-wrap { margin: 0.75rem 0.9rem; }
 
   /* ── Filmstrip ─────────────────────────────────────────────────────────── */
   .filmstrip {

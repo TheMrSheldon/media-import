@@ -6,6 +6,7 @@
   export let season: number | '' = '';
   export let episode: number | '' = '';
   export let episodeTitle: string = '';
+  export let asFolder: boolean = false;
 </script>
 
 <div class="form">
@@ -38,6 +39,10 @@
         <input id="movie-year" class="input" type="number" bind:value={year} placeholder="2024" min="1900" max="2099" />
       </div>
     </div>
+    <label class="checkbox-row">
+      <input type="checkbox" bind:checked={asFolder} />
+      Store as its own folder — enables extras
+    </label>
   {:else}
     <div class="row">
       <div class="field">
@@ -84,6 +89,12 @@
   .field { display: flex; flex-direction: column; gap: 0.25rem; flex: 1; }
   .field-narrow { max-width: 100px; flex: 0 0 100px; }
   label { font-size: 0.8rem; font-weight: 600; color: var(--text-muted); }
+  .checkbox-row {
+    display: flex; align-items: center; gap: 0.4rem;
+    font-size: 0.85rem; font-weight: 500; color: var(--text);
+    cursor: pointer;
+  }
+  .checkbox-row input { cursor: pointer; }
   .input {
     padding: 0.45rem 0.7rem;
     border: 1px solid var(--border);

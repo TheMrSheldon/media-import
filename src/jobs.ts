@@ -16,6 +16,7 @@ export interface Job {
   downloadedBytes: number | null;
   command: string | null;
   createdAt: number;
+  overwriteAvoided?: boolean;
 }
 
 export interface ImportRequest {
@@ -28,6 +29,7 @@ export interface ImportRequest {
   season?: number;
   episode?: number;
   episodeTitle?: string;
+  asFolder?: boolean;
 }
 
 const jobs = new Map<string, Job>();
@@ -151,7 +153,13 @@ function emit(id: string) {
   const job = jobs.get(id);
   const list = subscribers.get(id);
   if (!job || !list) return;
-  const data = JSON.stringify({ phase: job.phase, percent: job.percent, message: job.message, downloadedBytes: job.downloadedBytes });
+  const data = JSON.stringify({
+    phase: job.phase,
+    percent: job.percent,
+    message: job.message,
+    downloadedBytes: job.downloadedBytes,
+    overwriteAvoided: job.overwriteAvoided,
+  });
   for (const res of list) {
     res.write(`data: ${data}\n\n`);
   }

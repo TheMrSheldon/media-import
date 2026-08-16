@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { mkdir } from 'fs/promises';
 import { config } from './config.js';
 import { initJobs, flushJobs } from './jobs.js';
 import searchRouter from './routes/search.js';
@@ -14,6 +15,8 @@ import tvrecordRouter from './routes/tvrecord.js';
 import tvrecordingsRouter from './routes/tvrecordings.js';
 import { requireTvh, tvhErrorHandler } from './middleware/requireTvh.js';
 import cutRouter from './routes/cut.js';
+import uploadRouter from './routes/upload.js';
+import libraryRouter from './routes/library.js';
 import { initPreset } from './services/active-preset.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -36,6 +39,8 @@ router.use('/api/import', importRouter);
 router.use('/api/jobs', jobsRouter);
 router.use('/api/filesize', filesizeRouter);
 router.use('/api/cut', cutRouter);
+router.use('/api/upload', uploadRouter);
+router.use('/api/library', libraryRouter);
 router.use('/api/tvguide', requireTvh, tvguideRouter);
 router.use('/api/tvrecord', requireTvh, tvrecordRouter);
 router.use('/api/tvrecordings', requireTvh, tvrecordingsRouter);
@@ -51,6 +56,9 @@ router.get('*', (_req, res) => {
 // Strip trailing slash so '/' becomes '' for app.use (handled by || below)
 const base = config.basePath === '/' ? '' : config.basePath;
 app.use(base || '/', router);
+
+// Multer (upload) and the cut/transcode pipelines all write here without mkdir'ing it themselves
+await mkdir(config.tempDir, { recursive: true });
 
 await initJobs();
 await initPreset();
@@ -68,4 +76,5 @@ app.listen(config.port, () => {
   console.log(`  Series → ${config.seriesBaseDir}`);
   console.log(`  Temp   → ${config.tempDir}`);
   console.log(`  Data   → ${config.dataDir}`);
+  console.log(`  Uploads → ${config.uploadDestinations.length ? config.uploadDestinations.map((d) => d.label).join(', ') : 'not configured'}`);
 });

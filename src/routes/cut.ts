@@ -5,14 +5,11 @@ import { join, resolve, sep, extname, basename } from 'path';
 import { config } from '../config.js';
 import { createJob, updateJob, appendLog } from '../jobs.js';
 import { cutToIntermediate, getVideoDuration, type AdSegment } from '../services/cutter.js';
-import { transcodeWithPreset } from '../services/transcoder.js';
-import { presetToFfmpeg } from '../services/preset-parser.js';
-import { moveToLibrary, destExists } from '../services/filemanager.js';
-import { activePreset } from '../services/active-preset.js';
+import { checkConflict } from '../services/filemanager.js';
+import { runTranscodeAndMove } from '../services/pipeline.js';
+import { VIDEO_EXTS } from '../services/videoExts.js';
 
 const router = Router();
-
-const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.ts', '.avi', '.mov', '.m4v', '.wmv']);
 
 
 function guardUncutPath(res: Response): boolean {
@@ -136,6 +133,7 @@ interface CutStartBody {
   season?: number;
   episode?: number;
   episodeTitle?: string;
+  asFolder?: boolean;
   force?: boolean;
 }
 
@@ -159,13 +157,13 @@ router.post('/start', async (req: Request, res: Response) => {
   }
 
   if (!body.force) {
-    const existing = await destExists({
+    const conflict = await checkConflict({
       videoUrl: '', title: body.title, year: body.year, imdbId: body.imdbId,
       mediaType: body.mediaType, seriesTitle: body.seriesTitle,
       season: body.season, episode: body.episode, episodeTitle: body.episodeTitle,
-    });
-    if (existing) {
-      res.status(409).json({ conflict: true, existingPath: existing });
+    }, { asFolder: body.asFolder });
+    if (conflict) {
+      res.status(409).json({ conflict: true, ...conflict });
       return;
     }
   }
@@ -185,8 +183,6 @@ router.post('/start', async (req: Request, res: Response) => {
 
 async function runCutPipeline(jobId: string, sourcePath: string, req: CutStartBody): Promise<void> {
   let intermediatePath: string | null = null;
-  let transcodePath: string | null = null;
-  const passLogBase = join(config.tempDir, `${jobId}_ffmpeg2pass`);
 
   try {
     let inputForTranscode = sourcePath;
@@ -199,39 +195,7 @@ async function runCutPipeline(jobId: string, sourcePath: string, req: CutStartBo
       inputForTranscode = intermediatePath;
     }
 
-    const ffmpegJob = activePreset
-      ? presetToFfmpeg(activePreset, inputForTranscode, join(config.tempDir, `${jobId}_transcoded.PLACEHOLDER`), passLogBase)
-      : (() => {
-          const out = join(config.tempDir, `${jobId}_transcoded.mp4`);
-          return {
-            passes: [[
-              '-y', '-i', inputForTranscode,
-              '-c:v', 'libx265', '-crf', '22', '-preset', 'medium',
-              '-c:a', 'aac', '-b:a', '192k',
-              '-movflags', '+faststart',
-              out,
-            ]],
-            outputExt: 'mp4',
-          };
-        })();
-
-    transcodePath = join(config.tempDir, `${jobId}_transcoded.${ffmpegJob.outputExt}`);
-    for (let i = 0; i < ffmpegJob.passes.length; i++) {
-      ffmpegJob.passes[i] = ffmpegJob.passes[i].map((arg) =>
-        arg.endsWith('.PLACEHOLDER') ? transcodePath! : arg,
-      );
-    }
-
-    const finalPassArgs = ffmpegJob.passes[ffmpegJob.passes.length - 1];
-    updateJob(jobId, { command: `ffmpeg ${finalPassArgs.join(' ')}` });
-    updateJob(jobId, { phase: 'transcoding', percent: 0, message: 'Transcoding…' });
-
-    await transcodeWithPreset(ffmpegJob, (pct) => {
-      updateJob(jobId, { percent: pct, message: `Transcoding… ${pct}%` });
-    }, (line) => appendLog(jobId, line));
-
-    updateJob(jobId, { phase: 'moving', percent: 100, message: 'Moving to library…' });
-    const dest = await moveToLibrary(transcodePath, {
+    const { dest, renamed } = await runTranscodeAndMove(jobId, inputForTranscode, {
       videoUrl: '',
       title: req.title,
       year: req.year,
@@ -241,18 +205,18 @@ async function runCutPipeline(jobId: string, sourcePath: string, req: CutStartBo
       season: req.season,
       episode: req.episode,
       episodeTitle: req.episodeTitle,
-    });
+    }, { asFolder: req.asFolder });
 
     if (intermediatePath) await unlink(intermediatePath).catch(() => {});
-    await Promise.all([
-      unlink(`${passLogBase}-0.log`).catch(() => {}),
-      unlink(`${passLogBase}-0.log.mbtree`).catch(() => {}),
-    ]);
 
-    updateJob(jobId, { phase: 'done', percent: 100, message: `Saved to ${dest}` });
+    updateJob(jobId, {
+      phase: 'done',
+      percent: 100,
+      overwriteAvoided: renamed,
+      message: renamed ? `Saved to ${dest} (renamed to avoid overwriting an existing file)` : `Saved to ${dest}`,
+    });
   } catch (err) {
     if (intermediatePath) await unlink(intermediatePath).catch(() => {});
-    if (transcodePath) await unlink(transcodePath).catch(() => {});
     throw err;
   }
 }

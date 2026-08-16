@@ -2,12 +2,10 @@ import { Router, Request, Response } from 'express';
 import { unlink } from 'fs/promises';
 import { extname, join } from 'path';
 import { config } from '../config.js';
-import { createJob, updateJob, appendLog, type ImportRequest } from '../jobs.js';
+import { createJob, updateJob, type ImportRequest } from '../jobs.js';
 import { downloadFile } from '../services/downloader.js';
-import { transcodeWithPreset } from '../services/transcoder.js';
-import { presetToFfmpeg } from '../services/preset-parser.js';
-import { moveToLibrary, destExists } from '../services/filemanager.js';
-import { activePreset } from '../services/active-preset.js';
+import { checkConflict } from '../services/filemanager.js';
+import { runTranscodeAndMove } from '../services/pipeline.js';
 
 const router = Router();
 
@@ -25,9 +23,9 @@ router.post('/', async (req: Request, res: Response) => {
   }
 
   if (!body.force) {
-    const existing = await destExists(body);
-    if (existing) {
-      res.status(409).json({ conflict: true, existingPath: existing });
+    const conflict = await checkConflict(body, { asFolder: body.asFolder });
+    if (conflict) {
+      res.status(409).json({ conflict: true, ...conflict });
       return;
     }
   }
@@ -47,7 +45,6 @@ router.post('/', async (req: Request, res: Response) => {
 
 async function runPipeline(jobId: string, req: ImportRequest): Promise<void> {
   let downloadPath: string | null = null;
-  let transcodePath: string | null = null;
 
   try {
     let urlPath = '';
@@ -62,57 +59,19 @@ async function runPipeline(jobId: string, req: ImportRequest): Promise<void> {
     });
     updateJob(jobId, { downloadedBytes: receivedBytes });
 
-    // Phase 2: Transcode — build args from preset or fall back to built-in H.265 defaults
-    const passLogBase = join(config.tempDir, `${jobId}_ffmpeg2pass`);
-    const ffmpegJob = activePreset
-      ? presetToFfmpeg(activePreset, downloadPath, join(config.tempDir, `${jobId}_transcoded.PLACEHOLDER`), passLogBase)
-      : (() => {
-          // Built-in default: H.265 CRF 22
-          const out = join(config.tempDir, `${jobId}_transcoded.mp4`);
-          return {
-            passes: [[
-              '-y', '-i', downloadPath!,
-              '-c:v', 'libx265', '-crf', '22', '-preset', 'medium',
-              '-c:a', 'aac', '-b:a', '192k',
-              '-movflags', '+faststart',
-              out,
-            ]],
-            outputExt: 'mp4',
-          };
-        })();
+    // Phase 2+3: Transcode and move to library
+    const { dest, renamed } = await runTranscodeAndMove(jobId, downloadPath, req, { asFolder: req.asFolder });
 
-    // Replace the PLACEHOLDER extension with the real output extension
-    transcodePath = join(config.tempDir, `${jobId}_transcoded.${ffmpegJob.outputExt}`);
-    for (let i = 0; i < ffmpegJob.passes.length; i++) {
-      ffmpegJob.passes[i] = ffmpegJob.passes[i].map((arg) =>
-        arg.endsWith('.PLACEHOLDER') ? transcodePath! : arg,
-      );
-    }
+    await unlink(downloadPath).catch(() => {});
 
-    // Store the final-pass command for display in the UI
-    const finalPassArgs = ffmpegJob.passes[ffmpegJob.passes.length - 1];
-    updateJob(jobId, { command: `ffmpeg ${finalPassArgs.join(' ')}` });
-
-    updateJob(jobId, { phase: 'transcoding', percent: 0, message: 'Transcoding…' });
-    await transcodeWithPreset(ffmpegJob, (pct) => {
-      updateJob(jobId, { percent: pct, message: `Transcoding… ${pct}%` });
-    }, (line) => appendLog(jobId, line));
-
-    // Phase 3: Move to library
-    updateJob(jobId, { phase: 'moving', percent: 100, message: 'Moving to library…' });
-    const dest = await moveToLibrary(transcodePath, req);
-
-    if (downloadPath) await unlink(downloadPath).catch(() => {});
-    // Clean up 2-pass log files if they exist
-    await Promise.all([
-      unlink(`${passLogBase}-0.log`).catch(() => {}),
-      unlink(`${passLogBase}-0.log.mbtree`).catch(() => {}),
-    ]);
-
-    updateJob(jobId, { phase: 'done', percent: 100, message: `Saved to ${dest}` });
+    updateJob(jobId, {
+      phase: 'done',
+      percent: 100,
+      overwriteAvoided: renamed,
+      message: renamed ? `Saved to ${dest} (renamed to avoid overwriting an existing file)` : `Saved to ${dest}`,
+    });
   } catch (err) {
     if (downloadPath) await unlink(downloadPath).catch(() => {});
-    if (transcodePath) await unlink(transcodePath).catch(() => {});
     throw err;
   }
 }

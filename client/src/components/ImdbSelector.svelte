@@ -4,15 +4,21 @@
   export let query: string = '';
   export let selected: ImdbResult | null = null;
   export let onSelect: (result: ImdbResult) => void;
+  export let onClear: (() => void) | null = null;
 
   let results: ImdbResult[] = [];
   let loading = false;
   let error = '';
   let searchQuery = '';
   let debounceTimer: ReturnType<typeof setTimeout>;
+  let prevQuery = '';
 
-  $: {
-    if (query && query !== searchQuery) {
+  // Only sync when the parent's query prop changes, not when the user types.
+  // Reading searchQuery in this block would make Svelte re-run it on every keystroke,
+  // overwriting the user's input with the parent's value.
+  $: if (query !== prevQuery) {
+    prevQuery = query;
+    if (query) {
       searchQuery = query;
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => triggerSearch(query), 400);
@@ -47,6 +53,9 @@
     <span class="section-title">IMDb</span>
     {#if selected}
       <span class="selected-badge">✓ {selected.title} ({selected.year ?? '?'})</span>
+      <!-- svelte-ignore a11y-click-events-have-key-events -->
+      <!-- svelte-ignore a11y-no-static-element-interactions -->
+      <span class="change-link" on:click={() => { selected = null; results = []; searchQuery = ''; onClear?.(); }} title="Clear selection and search again">change</span>
     {/if}
   </div>
 
@@ -103,6 +112,8 @@
   .header { display: flex; align-items: center; gap: 0.75rem; }
   .section-title { font-size: 0.85rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
   .selected-badge { font-size: 0.8rem; background: #dcfce7; color: #166534; padding: 0.15rem 0.5rem; border-radius: 4px; border: 1px solid #bbf7d0; }
+  .change-link { font-size: 0.75rem; color: var(--text-muted); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+  .change-link:hover { color: var(--accent); }
   .search-row { display: flex; gap: 0.5rem; }
   .input {
     flex: 1;

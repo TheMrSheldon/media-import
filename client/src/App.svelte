@@ -1,11 +1,18 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import SearchPanel from './components/SearchPanel.svelte';
   import ImdbSelector from './components/ImdbSelector.svelte';
   import MediaForm from './components/MediaForm.svelte';
   import RecordingQueue from './components/RecordingQueue.svelte';
   import JobQueue from './components/JobQueue.svelte';
   import CutEditor from './components/CutEditor.svelte';
-  import { startImport, recordTV, ConflictError, type ImdbResult, type MediathekResult, type TVGuideResult } from './api.js';
+  import ConflictBox from './components/ConflictBox.svelte';
+  import UploadExtras from './components/UploadExtras.svelte';
+  import {
+    startImport, recordTV, startUpload, listUploadDestinations, getLibraryPaths, ConflictError,
+    type ImdbResult, type MediathekResult, type TVGuideResult, type UploadDestination, type ExtraFile, type LibraryPaths,
+  } from './api.js';
+  import { buildPreviewPath, sanitize, pad } from './lib/naming.js';
 
   let page: 'import' | 'cut' = 'import';
 
@@ -13,6 +20,7 @@
   let videoUrl = '';
   let selectedMediathekId: string | null = null;
   let tvEvent: TVGuideResult | null = null;
+  let uploadFile: File | null = null;
 
   // Media form state
   let title = '';
@@ -22,20 +30,37 @@
   let season: number | '' = '';
   let episode: number | '' = '';
   let episodeTitle = '';
+  let asFolder = false;
 
   // IMDB
   let imdbQuery = '';
   let selectedImdb: ImdbResult | null = null;
+
+  // Upload-only options
+  let destinations: UploadDestination[] = [];
+  let destinationId: string | null = null;
+  let transcode = false;
+  let extras: ExtraFile[] = [];
+  let uploadProgress: number | null = null;
+
+  let libraryPaths: LibraryPaths | null = null;
 
   // Submission
   let submitting = false;
   let submitError = '';
   let submitSuccess = '';
   let conflictPath: string | null = null;
+  let suggestedPath: string | undefined;
   let jobQueue: JobQueue;
+
+  onMount(async () => {
+    try { destinations = await listUploadDestinations(); } catch { /* upload not configured */ }
+    try { libraryPaths = await getLibraryPaths(); } catch { /* ignore */ }
+  });
 
   function handleMediathekSelect(result: MediathekResult, url: string) {
     tvEvent = null;
+    uploadFile = null;
     videoUrl = url;
     selectedMediathekId = result.id;
     const rawTitle = result.title || result.topic;
@@ -47,6 +72,7 @@
 
   function handleUrlChange(url: string) {
     tvEvent = null;
+    uploadFile = null;
     selectedMediathekId = null;
     videoUrl = url;
     submitSuccess = '';
@@ -54,6 +80,7 @@
 
   function handleTVSelect(r: TVGuideResult) {
     videoUrl = '';
+    uploadFile = null;
     selectedMediathekId = null;
     tvEvent = r;
     title = r.title;
@@ -69,6 +96,18 @@
       }
     }
     if (r.subtitle) episodeTitle = r.subtitle;
+  }
+
+  function handleUploadFileSelect(file: File) {
+    videoUrl = '';
+    selectedMediathekId = null;
+    tvEvent = null;
+    uploadFile = file;
+    const rawTitle = file.name.replace(/\.[^./]+$/, '').replace(/[._]/g, ' ').trim();
+    title = rawTitle;
+    imdbQuery = rawTitle;
+    selectedImdb = null;
+    submitSuccess = '';
   }
 
   function clearUrl() {
@@ -100,33 +139,31 @@
     }
   }
 
-  function sanitize(s: string): string {
-    return s.replace(/[<>:"/\\|?*\x00-\x1f]/g, '').trim();
-  }
+  $: libraryPath = uploadFile
+    ? (destinationId !== null ? destinations.find((d) => d.id === destinationId)?.path ?? null : '⚠ choose a destination')
+    : (mediaType === 'movie' ? libraryPaths?.movieBaseDir ?? null : libraryPaths?.seriesBaseDir ?? null);
 
-  function pad(n: number | ''): string {
-    return String(n).padStart(2, '0');
-  }
-
-  $: previewPath = (() => {
-    if (!selectedImdb || !title.trim() || year === '') return null;
-    if (mediaType === 'movie') {
-      const name = sanitize(`${title.trim()} (${year}) [imdbid-${selectedImdb.imdbId}]`);
-      return `${name} / ${name}.mp4`;
-    }
-    const series = sanitize(seriesTitle.trim() || title.trim());
-    const epTag = `S${pad(season || 1)}E${pad(episode || 1)}`;
-    const epSuffix = episodeTitle.trim() ? ` - ${sanitize(episodeTitle.trim())}` : '';
-    return `${sanitize(`${series} (${year})`)} / Season ${pad(season || 1)} / ${series} - ${epTag}${epSuffix}.mp4`;
-  })();
+  $: previewPath = buildPreviewPath({
+    mediaType,
+    title,
+    year,
+    imdbId: selectedImdb?.imdbId ?? '',
+    seriesTitle,
+    season,
+    episode,
+    episodeTitle,
+    asFolder,
+    libraryPath,
+  });
 
   $: canSubmit =
     !submitting &&
-    (videoUrl.trim() !== '' || tvEvent !== null) &&
+    (videoUrl.trim() !== '' || tvEvent !== null || uploadFile !== null) &&
     selectedImdb !== null &&
     title.trim() !== '' &&
     year !== '' &&
-    (mediaType === 'movie' || (season !== '' && episode !== ''));
+    (mediaType === 'movie' || (season !== '' && episode !== '')) &&
+    (uploadFile === null || destinationId !== null);
 
   function resetForm() {
     title = '';
@@ -137,6 +174,12 @@
     episodeTitle = '';
     selectedImdb = null;
     imdbQuery = '';
+    asFolder = false;
+    uploadFile = null;
+    destinationId = null;
+    transcode = false;
+    extras = [];
+    uploadProgress = null;
   }
 
   async function handleSubmit(force = false) {
@@ -145,12 +188,13 @@
     submitError = '';
     submitSuccess = '';
     conflictPath = null;
+    suggestedPath = undefined;
     try {
       if (tvEvent) {
         let recordingTitle: string;
         if (mediaType === 'series') {
           const base = sanitize((seriesTitle.trim() || title.trim()) + ` (${year})`);
-          const epTag = `S${pad(season || 1)}E${pad(episode || 1)}`;
+          const epTag = `S${pad(season)}E${pad(episode)}`;
           const epSuffix = episodeTitle.trim() ? ` - ${sanitize(episodeTitle.trim())}` : '';
           recordingTitle = `${base} - ${epTag}${epSuffix}`;
         } else {
@@ -165,6 +209,29 @@
         submitSuccess = `Scheduled on ${tvEvent.channelName}`;
         tvEvent = null;
         resetForm();
+      } else if (uploadFile) {
+        uploadProgress = 0;
+        const { jobIds } = await startUpload(
+          {
+            title: title.trim(),
+            year: Number(year),
+            imdbId: selectedImdb.imdbId,
+            mediaType,
+            seriesTitle: seriesTitle.trim() || undefined,
+            season: season !== '' ? Number(season) : undefined,
+            episode: episode !== '' ? Number(episode) : undefined,
+            episodeTitle: episodeTitle.trim() || undefined,
+            asFolder,
+            transcode,
+            destinationId: destinationId!,
+            force,
+          },
+          uploadFile,
+          extras.filter((e) => e.file),
+          (pct) => { uploadProgress = pct; },
+        );
+        for (const id of jobIds) await jobQueue.addJob(id);
+        resetForm();
       } else {
         const { jobId } = await startImport({
           videoUrl,
@@ -176,6 +243,7 @@
           season: season !== '' ? Number(season) : undefined,
           episode: episode !== '' ? Number(episode) : undefined,
           episodeTitle: episodeTitle.trim() || undefined,
+          asFolder,
           force,
         });
         await jobQueue.addJob(jobId);
@@ -183,10 +251,11 @@
         resetForm();
       }
     } catch (e: any) {
-      if (e instanceof ConflictError) conflictPath = e.existingPath;
+      if (e instanceof ConflictError) { conflictPath = e.existingPath; suggestedPath = e.suggestedPath; }
       else submitError = e.message ?? 'Failed';
     } finally {
       submitting = false;
+      uploadProgress = null;
     }
   }
 </script>
@@ -215,17 +284,32 @@
       onSelect={handleMediathekSelect}
       onUrlChange={handleUrlChange}
       onTVSelect={handleTVSelect}
+      onFileSelect={handleUploadFileSelect}
       selectedMediathekId={selectedMediathekId}
       selectedTVEventId={tvEvent?.eventId ?? null}
     />
 
     <hr class="divider" />
 
+    {#if uploadFile}
+      <UploadExtras
+        bind:destinationId
+        bind:transcode
+        bind:extras
+        {destinations}
+        {mediaType}
+        onExtraAdded={() => { asFolder = true; }}
+      />
+
+      <hr class="divider" />
+    {/if}
+
     <!-- IMDB selector -->
     <ImdbSelector
       query={imdbQuery}
       selected={selectedImdb}
       onSelect={handleImdbSelect}
+      onClear={() => { selectedImdb = null; }}
     />
 
     <hr class="divider" />
@@ -239,6 +323,7 @@
       bind:season
       bind:episode
       bind:episodeTitle
+      bind:asFolder
     />
 
     <hr class="divider" />
@@ -253,14 +338,12 @@
 
     <!-- Submit -->
     {#if conflictPath}
-      <div class="conflict-box">
-        <p class="conflict-msg">Already exists in library:</p>
-        <p class="conflict-path">{conflictPath}</p>
-        <div class="conflict-actions">
-          <button class="btn-primary conflict-overwrite" on:click={() => handleSubmit(true)}>Overwrite</button>
-          <button class="btn-secondary" on:click={() => conflictPath = null}>Cancel</button>
-        </div>
-      </div>
+      <ConflictBox
+        existingPath={conflictPath}
+        {suggestedPath}
+        onContinue={() => handleSubmit(true)}
+        onCancel={() => { conflictPath = null; suggestedPath = undefined; }}
+      />
     {:else}
       {#if submitError}
         <p class="submit-error">{submitError}</p>
@@ -269,11 +352,18 @@
         <p class="submit-success">{submitSuccess}</p>
       {/if}
     {/if}
+    {#if uploadProgress !== null}
+      <div class="upload-progress-bar">
+        <div class="upload-progress-fill" style="width:{uploadProgress}%"></div>
+      </div>
+    {/if}
     <button class="btn-primary btn-import" disabled={!canSubmit} on:click={() => handleSubmit()}>
-      {#if submitting}
+      {#if uploadProgress !== null}
+        Uploading… {uploadProgress}%
+      {:else if submitting}
         {tvEvent ? 'Scheduling…' : 'Starting…'}
       {:else}
-        {tvEvent ? 'Schedule Recording' : 'Import'}
+        {tvEvent ? 'Schedule Recording' : uploadFile ? 'Upload' : 'Import'}
       {/if}
     </button>
   </div>
@@ -374,19 +464,8 @@
   .submit-error { color: var(--error); font-size: 0.875rem; margin: 0; }
   .submit-success { color: #16a34a; font-size: 0.875rem; margin: 0; font-weight: 600; }
 
-  .conflict-box {
-    padding: 0.65rem 0.75rem;
-    border: 1px solid #f87171;
-    border-left: 3px solid #ef4444;
-    border-radius: 6px;
-    background: rgba(239,68,68,0.06);
-    display: flex; flex-direction: column; gap: 0.35rem;
-  }
-  .conflict-msg { margin: 0; font-size: 0.78rem; font-weight: 700; color: #dc2626; }
-  .conflict-path { margin: 0; font-size: 0.75rem; font-family: ui-monospace, 'Cascadia Code', monospace; color: var(--text); word-break: break-all; }
-  .conflict-actions { display: flex; gap: 0.5rem; margin-top: 0.2rem; }
-  .conflict-overwrite { background: #dc2626; }
-  .conflict-overwrite:hover { background: #b91c1c; }
+  .upload-progress-bar { height: 6px; background: var(--bg-input); border-radius: 3px; overflow: hidden; }
+  .upload-progress-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.2s ease; }
 
   .preview-path {
     display: flex;

@@ -155,6 +155,9 @@
           <div class="job-header">
             <span class="job-title">{job.title}</span>
             <div class="job-header-right">
+              {#if job.overwriteAvoided}
+                <span class="warning-badge" title="Saved under a different name to avoid overwriting an existing file — you may want to rearrange it on the server.">⚠</span>
+              {/if}
               <span class="phase-badge" style="background:{phaseColor[job.phase] ?? '#6b7280'}">
                 {phaseLabel[job.phase] ?? job.phase}
               </span>
@@ -229,6 +232,7 @@
   .job-header-right { display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0; }
   .job-title { font-size: 0.9rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .phase-badge { font-size: 0.7rem; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: 4px; color: #fff; white-space: nowrap; }
+  .warning-badge { font-size: 0.85rem; cursor: default; }
   .dismiss-btn {
     background: none;
     border: none;

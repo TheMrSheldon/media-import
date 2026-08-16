@@ -4,10 +4,11 @@
   export let onSelect: (result: MediathekResult, url: string) => void;
   export let onUrlChange: (url: string) => void;
   export let onTVSelect: (result: TVGuideResult) => void;
+  export let onFileSelect: (file: File) => void;
   export let selectedMediathekId: string | null = null;
   export let selectedTVEventId: number | null = null;
 
-  let mode: 'mediathek' | 'url' | 'tv' = 'mediathek';
+  let mode: 'mediathek' | 'url' | 'tv' | 'upload' = 'mediathek';
   let query = '';
   let results: MediathekResult[] = [];
   let tvResults: TVGuideResult[] = [];
@@ -41,11 +42,21 @@
     if (e.key === 'Enter') search();
   }
 
+  let selectedFileName: string | null = null;
+
   function handleModeChange() {
     query = '';
     results = [];
     tvResults = [];
     error = '';
+    selectedFileName = null;
+  }
+
+  function handleFileInput(e: Event) {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    selectedFileName = file.name;
+    onFileSelect(file);
   }
 
   function pick(result: MediathekResult, quality: 'hd' | 'sd' | 'low') {
@@ -65,26 +76,34 @@
       <option value="mediathek">MediathekViewWeb</option>
       <option value="tv">TV Guide</option>
       <option value="url">URL</option>
+      <option value="upload">Upload</option>
     </select>
-    <input
-      bind:value={query}
-      on:keydown={handleKey}
-      placeholder={mode === 'url' ? 'https://example.com/video.mp4' : mode === 'tv' ? 'Search TV guide…' : 'Search MediathekViewWeb…'}
-      type="text"
-      class="input"
-    />
-    <button on:click={search} class="btn-search" disabled={loading} title={mode === 'url' ? 'Confirm URL' : 'Search'}>
-      {#if loading}
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" width="18" height="18" class="spin">
-          <path fill-rule="evenodd" d="M15.312 11.424a5.5 5.5 0 01-9.201-4.148 5.5 5.5 0 019.201 4.148z" clip-rule="evenodd" opacity="0.3"/>
-          <path d="M2.043 9.5a7.5 7.5 0 0113.414-4.648.75.75 0 10-1.178-.932A6 6 0 103.543 10.25a.75.75 0 10-1.5-.75z"/>
-        </svg>
-      {:else}
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" width="18" height="18">
-          <path fill-rule="evenodd" d="M9 3.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM2 9a7 7 0 1112.452 4.391l3.328 3.329a.75.75 0 11-1.06 1.06l-3.329-3.328A7 7 0 012 9z" clip-rule="evenodd" />
-        </svg>
-      {/if}
-    </button>
+    {#if mode === 'upload'}
+      <label class="file-input-label">
+        <input type="file" accept="video/*" on:change={handleFileInput} class="file-input" />
+        <span class="file-input-text">{selectedFileName ?? 'Choose a video file…'}</span>
+      </label>
+    {:else}
+      <input
+        bind:value={query}
+        on:keydown={handleKey}
+        placeholder={mode === 'url' ? 'https://example.com/video.mp4' : mode === 'tv' ? 'Search TV guide…' : 'Search MediathekViewWeb…'}
+        type="text"
+        class="input"
+      />
+      <button on:click={search} class="btn-search" disabled={loading} title={mode === 'url' ? 'Confirm URL' : 'Search'}>
+        {#if loading}
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" width="18" height="18" class="spin">
+            <path fill-rule="evenodd" d="M15.312 11.424a5.5 5.5 0 01-9.201-4.148 5.5 5.5 0 019.201 4.148z" clip-rule="evenodd" opacity="0.3"/>
+            <path d="M2.043 9.5a7.5 7.5 0 0113.414-4.648.75.75 0 10-1.178-.932A6 6 0 103.543 10.25a.75.75 0 10-1.5-.75z"/>
+          </svg>
+        {:else}
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" width="18" height="18">
+            <path fill-rule="evenodd" d="M9 3.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM2 9a7 7 0 1112.452 4.391l3.328 3.329a.75.75 0 11-1.06 1.06l-3.329-3.328A7 7 0 012 9z" clip-rule="evenodd" />
+          </svg>
+        {/if}
+      </button>
+    {/if}
   </div>
 
   {#if error}
@@ -198,6 +217,23 @@
     font-size: 0.95rem;
     outline: none;
     min-width: 0;
+  }
+
+  .file-input-label {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    padding: 0.5rem 0.75rem;
+    cursor: pointer;
+    min-width: 0;
+  }
+  .file-input { display: none; }
+  .file-input-text {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .btn-search {

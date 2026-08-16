@@ -59,6 +59,7 @@ export interface ImportRequest {
   season?: number;
   episode?: number;
   episodeTitle?: string;
+  asFolder?: boolean;
   force?: boolean;
 }
 
@@ -71,6 +72,7 @@ export interface Job {
   downloadedBytes: number | null;
   command: string | null;
   createdAt: number;
+  overwriteAvoided?: boolean;
 }
 
 export interface CutSegment { start: number; end: number; }
@@ -86,15 +88,48 @@ export interface CutImportRequest {
   season?: number;
   episode?: number;
   episodeTitle?: string;
+  asFolder?: boolean;
+  force?: boolean;
+}
+
+export type ExtraType =
+  | 'trailer'
+  | 'behindthescenes'
+  | 'deleted'
+  | 'interview'
+  | 'scene'
+  | 'short'
+  | 'featurette'
+  | 'other';
+
+export interface ExtraFile {
+  file: File;
+  type: ExtraType;
+}
+
+export interface UploadRequest {
+  title: string;
+  year: number;
+  imdbId: string;
+  mediaType: 'movie' | 'series';
+  seriesTitle?: string;
+  season?: number;
+  episode?: number;
+  episodeTitle?: string;
+  asFolder?: boolean;
+  transcode?: boolean;
+  destinationId: string;
   force?: boolean;
 }
 
 export class ConflictError extends Error {
   conflict = true;
   existingPath: string;
-  constructor(path: string) {
+  suggestedPath?: string;
+  constructor(path: string, suggestedPath?: string) {
     super(`File already exists in the library`);
     this.existingPath = path;
+    this.suggestedPath = suggestedPath;
   }
 }
 
@@ -123,7 +158,7 @@ export async function startCutImport(req: CutImportRequest): Promise<{ jobId: st
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
-    if (res.status === 409) throw new ConflictError(err.existingPath ?? '');
+    if (res.status === 409) throw new ConflictError(err.existingPath ?? '', err.suggestedPath);
     throw new Error(err.error ?? res.statusText);
   }
   return res.json();
@@ -193,10 +228,71 @@ export async function startImport(req: ImportRequest): Promise<{ jobId: string }
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
-    if (res.status === 409) throw new ConflictError(err.existingPath ?? '');
+    if (res.status === 409) throw new ConflictError(err.existingPath ?? '', err.suggestedPath);
     throw new Error(err.error ?? res.statusText);
   }
   return res.json();
+}
+
+export interface UploadDestination { id: string; label: string; path: string; }
+
+export async function listUploadDestinations(): Promise<UploadDestination[]> {
+  const res = await fetch(`${BASE}/api/upload/destinations`);
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? res.statusText);
+  return res.json();
+}
+
+export interface LibraryPaths { movieBaseDir: string; seriesBaseDir: string; }
+
+export async function getLibraryPaths(): Promise<LibraryPaths> {
+  const res = await fetch(`${BASE}/api/library`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export function startUpload(
+  fields: UploadRequest,
+  mainFile: File,
+  extras: ExtraFile[],
+  onProgress: (percent: number) => void,
+): Promise<{ jobIds: string[] }> {
+  const form = new FormData();
+  form.append('title', fields.title);
+  form.append('year', String(fields.year));
+  form.append('imdbId', fields.imdbId);
+  form.append('mediaType', fields.mediaType);
+  if (fields.seriesTitle) form.append('seriesTitle', fields.seriesTitle);
+  if (fields.season !== undefined) form.append('season', String(fields.season));
+  if (fields.episode !== undefined) form.append('episode', String(fields.episode));
+  if (fields.episodeTitle) form.append('episodeTitle', fields.episodeTitle);
+  form.append('asFolder', String(fields.asFolder ?? false));
+  form.append('transcode', String(fields.transcode ?? false));
+  form.append('destinationId', fields.destinationId);
+  if (fields.force) form.append('force', 'true');
+  form.append('file', mainFile);
+  form.append('extras', JSON.stringify(extras.map((e) => ({ type: e.type }))));
+  for (const e of extras) form.append('extraFiles', e.file);
+
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${BASE}/api/upload`);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      let body: any = {};
+      try { body = JSON.parse(xhr.responseText); } catch { /* ignore */ }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(body);
+      } else if (xhr.status === 409) {
+        reject(new ConflictError(body.existingPath ?? '', body.suggestedPath));
+      } else {
+        reject(new Error(body.error ?? xhr.statusText));
+      }
+    };
+    xhr.onerror = () => reject(new Error('Upload failed'));
+    xhr.send(form);
+  });
 }
 
 export async function getJobLog(id: string): Promise<string> {
@@ -222,7 +318,7 @@ export async function getFileSize(url: string): Promise<number | null> {
   return data.size ?? null;
 }
 
-export function watchJob(jobId: string, onUpdate: (data: { phase: string; percent: number; message: string; downloadedBytes: number | null }) => void): () => void {
+export function watchJob(jobId: string, onUpdate: (data: { phase: string; percent: number; message: string; downloadedBytes: number | null; overwriteAvoided?: boolean }) => void): () => void {
   const es = new EventSource(`${BASE}/api/jobs/${jobId}/events`);
   es.onmessage = (e) => {
     try {
