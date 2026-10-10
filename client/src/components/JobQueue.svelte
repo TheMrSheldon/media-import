@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { listJobs, watchJob, dismissJob, getJobLog, formatBytes, type Job } from '../api.js';
+  import { listJobs, watchJob, dismissJob, getJobLog, audiobookDownloadUrl, formatBytes, type Job } from '../api.js';
 
   let jobs: Job[] = [];
   let cleanups: (() => void)[] = [];
@@ -161,6 +161,9 @@
               <span class="phase-badge" style="background:{phaseColor[job.phase] ?? '#6b7280'}">
                 {phaseLabel[job.phase] ?? job.phase}
               </span>
+              {#if job.phase === 'done' && job.downloadable}
+                <a class="btn-dl" href={audiobookDownloadUrl(job.id)} download>Download M4B</a>
+              {/if}
               {#if job.phase === 'done' || job.phase === 'error'}
                 <button class="dismiss-btn" title="Dismiss" on:click={() => {
                   dismissJob(job.id);
@@ -233,6 +236,18 @@
   .job-title { font-size: 0.9rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .phase-badge { font-size: 0.7rem; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: 4px; color: #fff; white-space: nowrap; }
   .warning-badge { font-size: 0.85rem; cursor: default; }
+  .btn-dl {
+    background: #2563eb;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.2rem 0.6rem;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .btn-dl:hover { background: #1d4ed8; }
   .dismiss-btn {
     background: none;
     border: none;

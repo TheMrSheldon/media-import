@@ -6,6 +6,7 @@ import { createJob, updateJob, type ImportRequest } from '../jobs.js';
 import { downloadFile } from '../services/downloader.js';
 import { checkConflict } from '../services/filemanager.js';
 import { runTranscodeAndMove } from '../services/pipeline.js';
+import { problem } from '../problem.js';
 
 const router = Router();
 
@@ -13,19 +14,22 @@ router.post('/', async (req: Request, res: Response) => {
   const body = req.body as ImportRequest & { force?: boolean };
 
   if (!body.videoUrl || !body.title || !body.year || !body.imdbId || !body.mediaType) {
-    res.status(400).json({ error: 'Missing required fields: videoUrl, title, year, imdbId, mediaType' });
+    problem(res, 400, '/problems/missing-fields', 'Missing required fields',
+      'videoUrl, title, year, imdbId, and mediaType are required');
     return;
   }
 
   if (body.mediaType === 'series' && (!body.season || !body.episode)) {
-    res.status(400).json({ error: 'season and episode are required for series' });
+    problem(res, 400, '/problems/missing-fields', 'Missing required fields',
+      'season and episode are required for series');
     return;
   }
 
   if (!body.force) {
     const conflict = await checkConflict(body, { asFolder: body.asFolder });
     if (conflict) {
-      res.status(409).json({ conflict: true, ...conflict });
+      problem(res, 409, '/problems/conflict', 'File already exists',
+        'A file already exists at this path in the library', { conflict: true, ...conflict });
       return;
     }
   }
@@ -36,7 +40,7 @@ router.post('/', async (req: Request, res: Response) => {
       : `${body.title} (${body.year})`;
 
   const job = createJob(displayTitle);
-  res.json({ jobId: job.id });
+  res.status(201).json({ jobId: job.id });
 
   runPipeline(job.id, body).catch((err: Error) => {
     updateJob(job.id, { phase: 'error', message: err.message });
@@ -52,7 +56,6 @@ async function runPipeline(jobId: string, req: ImportRequest): Promise<void> {
     const srcExt = extname(urlPath) || '.mp4';
     downloadPath = join(config.tempDir, `${jobId}_original${srcExt}`);
 
-    // Phase 1: Download
     updateJob(jobId, { phase: 'downloading', percent: 0, message: 'Downloading…' });
     const { receivedBytes } = await downloadFile(req.videoUrl, downloadPath, (pct, received) => {
       updateJob(jobId, { percent: pct, message: `Downloading… ${pct}%`, downloadedBytes: received });

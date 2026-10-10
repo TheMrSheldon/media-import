@@ -73,6 +73,7 @@ export interface Job {
   command: string | null;
   createdAt: number;
   overwriteAvoided?: boolean;
+  downloadable?: boolean;
 }
 
 export interface CutSegment { start: number; end: number; }
@@ -135,9 +136,22 @@ export class ConflictError extends Error {
 
 export interface UncutFile { name: string; mtime: number; size: number; }
 
+export interface ArdItem {
+  id: string;
+  title: string;
+  summary: string;
+  duration: number;
+  publishDate: string;
+  imageUrl: string | null;
+  downloadUrl: string | null;
+  mimeType: string | null;
+  showTitle: string | null;
+  programSetId: string | null;
+}
+
 export async function listUncutFiles(): Promise<UncutFile[]> {
   const res = await fetch(`${BASE}/api/cut/files`);
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? res.statusText);
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? res.statusText);
   const data = await res.json();
   return data.files as UncutFile[];
 }
@@ -151,7 +165,7 @@ export async function getUncutDuration(filename: string): Promise<number> {
 
 
 export async function startCutImport(req: CutImportRequest): Promise<{ jobId: string }> {
-  const res = await fetch(`${BASE}/api/cut/start`, {
+  const res = await fetch(`${BASE}/api/cut/jobs`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),
@@ -159,7 +173,7 @@ export async function startCutImport(req: CutImportRequest): Promise<{ jobId: st
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     if (res.status === 409) throw new ConflictError(err.existingPath ?? '', err.suggestedPath);
-    throw new Error(err.error ?? res.statusText);
+    throw new Error(err.detail ?? res.statusText);
   }
   return res.json();
 }
@@ -185,14 +199,14 @@ export async function searchMediathek(query: string): Promise<MediathekResult[]>
 }
 
 export async function listRecordings(): Promise<DvrEntry[]> {
-  const res = await fetch(`${BASE}/api/tvrecordings`);
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? res.statusText);
+  const res = await fetch(`${BASE}/api/recordings`);
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? res.statusText);
   return res.json();
 }
 
 export async function searchTVGuide(q: string): Promise<TVGuideResult[]> {
   const res = await fetch(`${BASE}/api/tvguide?q=${encodeURIComponent(q)}`);
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? res.statusText);
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? res.statusText);
   return res.json();
 }
 
@@ -202,14 +216,14 @@ export async function recordTV(entry: {
   stop: number;
   title?: string;
 }): Promise<{ uuid: string }> {
-  const res = await fetch(`${BASE}/api/tvrecord`, {
+  const res = await fetch(`${BASE}/api/recordings`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(entry),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error ?? res.statusText);
+    throw new Error(err.detail ?? res.statusText);
   }
   return res.json();
 }
@@ -229,7 +243,7 @@ export async function startImport(req: ImportRequest): Promise<{ jobId: string }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     if (res.status === 409) throw new ConflictError(err.existingPath ?? '', err.suggestedPath);
-    throw new Error(err.error ?? res.statusText);
+    throw new Error(err.detail ?? res.statusText);
   }
   return res.json();
 }
@@ -341,6 +355,60 @@ export function formatDate(timestamp: number): string {
 
 export function formatTime(timestamp: number): string {
   return new Date(timestamp * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
+export async function searchAudiobook(q: string): Promise<ArdItem[]> {
+  const res = await fetch(`${BASE}/api/audiobook/search?q=${encodeURIComponent(q)}`);
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? res.statusText);
+  const data = await res.json();
+  return data.items as ArdItem[];
+}
+
+export async function startAudiobookImport(item: ArdItem): Promise<{ jobId: string }> {
+  const res = await fetch(`${BASE}/api/audiobook/jobs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ item }),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? res.statusText);
+  return res.json();
+}
+
+export async function fetchShowEpisodes(programSetId: string): Promise<ArdItem[]> {
+  const res = await fetch(`${BASE}/api/audiobook/episodes/${encodeURIComponent(programSetId)}`);
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? res.statusText);
+  const data = await res.json();
+  return data.episodes as ArdItem[];
+}
+
+export async function fetchShowCount(programSetId: string): Promise<number> {
+  const res = await fetch(`${BASE}/api/audiobook/count/${encodeURIComponent(programSetId)}`);
+  if (!res.ok) return 0;
+  const data = await res.json();
+  return data.count ?? 0;
+}
+
+export async function startShowImport(
+  programSetId: string,
+  title: string,
+  imageUrl: string | null,
+  episodes?: ArdItem[],
+): Promise<{ jobId: string }> {
+  const res = await fetch(`${BASE}/api/audiobook/jobs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ programSetId, title, imageUrl, episodes }),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? res.statusText);
+  return res.json();
+}
+
+export function audiobookDownloadUrl(jobId: string): string {
+  return `${BASE}/api/audiobook/jobs/${jobId}/file`;
+}
+
+export async function cleanupAudiobookJob(jobId: string): Promise<void> {
+  await fetch(`${BASE}/api/audiobook/jobs/${jobId}`, { method: 'DELETE' });
 }
 
 export function formatDuration(seconds: number): string {

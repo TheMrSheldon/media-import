@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { searchMediathek, searchTVGuide, formatDuration, formatDate, formatTime, formatBytes, type MediathekResult, type TVGuideResult } from '../api.js';
 
   export let onSelect: (result: MediathekResult, url: string) => void;
@@ -15,6 +16,14 @@
   let loading = false;
   let error = '';
 
+  onMount(() => {
+    const q = new URLSearchParams(window.location.search).get('q');
+    if (q && mode === 'mediathek') {
+      query = q;
+      search();
+    }
+  });
+
   async function search() {
     if (mode === 'url') {
       onUrlChange(query.trim());
@@ -28,6 +37,7 @@
     try {
       if (mode === 'mediathek') {
         results = await searchMediathek(query.trim());
+        history.replaceState(history.state, '', `${window.location.pathname}?q=${encodeURIComponent(query.trim())}`);
       } else {
         tvResults = await searchTVGuide(query.trim());
       }

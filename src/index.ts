@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -11,12 +11,12 @@ import importRouter from './routes/import.js';
 import jobsRouter from './routes/jobs.js';
 import filesizeRouter from './routes/filesize.js';
 import tvguideRouter from './routes/tvguide.js';
-import tvrecordRouter from './routes/tvrecord.js';
-import tvrecordingsRouter from './routes/tvrecordings.js';
+import recordingsRouter from './routes/recordings.js';
 import { requireTvh, tvhErrorHandler } from './middleware/requireTvh.js';
 import cutRouter from './routes/cut.js';
 import uploadRouter from './routes/upload.js';
 import libraryRouter from './routes/library.js';
+import audiobookRouter from './routes/audiobook.js';
 import { initPreset } from './services/active-preset.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -41,10 +41,10 @@ router.use('/api/filesize', filesizeRouter);
 router.use('/api/cut', cutRouter);
 router.use('/api/upload', uploadRouter);
 router.use('/api/library', libraryRouter);
+router.use('/api/audiobook', audiobookRouter);
 router.use('/api/tvguide', requireTvh, tvguideRouter);
-router.use('/api/tvrecord', requireTvh, tvrecordRouter);
-router.use('/api/tvrecordings', requireTvh, tvrecordingsRouter);
-router.use(['/api/tvguide', '/api/tvrecord', '/api/tvrecordings'], tvhErrorHandler);
+router.use('/api/recordings', requireTvh, recordingsRouter);
+router.use(['/api/tvguide', '/api/recordings'], tvhErrorHandler);
 
 // Serve built frontend
 const publicDir = join(__dirname, '..', 'public');
@@ -53,12 +53,25 @@ router.get('*', (_req, res) => {
   res.sendFile(join(publicDir, 'index.html'));
 });
 
-// Strip trailing slash so '/' becomes '' for app.use (handled by || below)
 const base = config.basePath === '/' ? '' : config.basePath;
 app.use(base || '/', router);
 
 // Multer (upload) and the cut/transcode pipelines all write here without mkdir'ing it themselves
 await mkdir(config.tempDir, { recursive: true });
+
+// Global error handler — catches next(err) from all routes
+app.use((_err: Error, _req: Request, res: Response, _next: NextFunction) => {
+  console.error(_err);
+  res
+    .status(500)
+    .setHeader('Content-Type', 'application/problem+json')
+    .json({
+      type: '/problems/internal-error',
+      title: 'Internal Server Error',
+      status: 500,
+      detail: _err.message,
+    });
+});
 
 await initJobs();
 await initPreset();
