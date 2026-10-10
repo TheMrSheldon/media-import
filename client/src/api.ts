@@ -285,6 +285,13 @@ export async function fetchShowEpisodes(programSetId: string): Promise<ArdItem[]
   return data.episodes as ArdItem[];
 }
 
+export async function fetchShowCount(programSetId: string): Promise<number> {
+  const res = await fetch(`${BASE}/api/audiobook/count/${encodeURIComponent(programSetId)}`);
+  if (!res.ok) return 0;
+  const data = await res.json();
+  return data.count ?? 0;
+}
+
 export async function startShowImport(
   programSetId: string,
   title: string,

@@ -3,6 +3,7 @@
   import {
     searchAudiobook,
     fetchShowEpisodes,
+    fetchShowCount,
     startAudiobookImport,
     startShowImport,
     formatDuration,
@@ -20,9 +21,13 @@
   let searched = false;
 
   let expandedGroups = new Set<string>();
+  let episodeSelections = new Map<string, Set<string>>();
+  let episodeFilters = new Map<string, string>();
+  // Full episode list fetched on "Load all", keyed by group key
   let groupEpisodes = new Map<string, ArdItem[]>();
   let groupEpisodesLoading = new Set<string>();
-  let episodeSelections = new Map<string, Set<string>>();
+  // Total episode counts fetched in background after search, keyed by group key
+  let groupCounts = new Map<string, number>();
   // Keys currently mid-submit (prevents double-click)
   let submitting = new Set<string>();
 
@@ -71,11 +76,26 @@
     results = [];
     searched = false;
     expandedGroups = new Set();
-    groupEpisodes = new Map();
     episodeSelections = new Map();
+    episodeFilters = new Map();
+    groupEpisodes = new Map();
+    groupCounts = new Map();
     try {
       results = await searchAudiobook(query.trim());
       searched = true;
+      // Fetch episode counts in the background. Use results directly — groups is
+      // a reactive variable that hasn't re-evaluated yet at this point in the async fn.
+      const seenProgramSets = new Set<string>();
+      for (const item of results) {
+        if (item.programSetId && !seenProgramSets.has(item.programSetId)) {
+          seenProgramSets.add(item.programSetId);
+          const key = item.programSetId;
+          fetchShowCount(key).then(count => {
+            groupCounts.set(key, count);
+            groupCounts = groupCounts;
+          }).catch(() => {});
+        }
+      }
       history.replaceState(
         history.state, '',
         `${window.location.pathname}?q=${encodeURIComponent(query.trim())}`,
@@ -91,25 +111,16 @@
     if (e.key === 'Enter') search();
   }
 
-  async function toggleExpand(key: string, programSetId: string | null) {
+  function toggleExpand(key: string) {
     if (expandedGroups.has(key)) {
       expandedGroups.delete(key);
     } else {
       expandedGroups.add(key);
-      if (programSetId && !groupEpisodes.has(key) && !groupEpisodesLoading.has(key)) {
-        groupEpisodesLoading.add(key);
-        groupEpisodesLoading = groupEpisodesLoading;
-        try {
-          const eps = await fetchShowEpisodes(programSetId);
-          groupEpisodes.set(key, eps);
-          episodeSelections.set(key, new Set(eps.map(e => e.id)));
-          groupEpisodes = groupEpisodes;
+      if (!episodeSelections.has(key)) {
+        const group = groups.find(g => g.key === key);
+        if (group) {
+          episodeSelections.set(key, new Set(group.items.map(e => e.id)));
           episodeSelections = new Map(episodeSelections);
-        } catch (e: any) {
-          searchError = e.message ?? 'Failed to load episodes';
-        } finally {
-          groupEpisodesLoading.delete(key);
-          groupEpisodesLoading = groupEpisodesLoading;
         }
       }
     }
@@ -124,10 +135,13 @@
     episodeSelections = new Map(episodeSelections);
   }
 
-  function toggleAllEpisodes(groupKey: string, selectAll: boolean) {
-    const eps = groupEpisodes.get(groupKey);
-    if (!eps) return;
-    episodeSelections.set(groupKey, selectAll ? new Set(eps.map(e => e.id)) : new Set());
+  function toggleAllEpisodes(groupKey: string, visibleEps: ArdItem[], selectAll: boolean) {
+    const current = new Set(episodeSelections.get(groupKey) ?? []);
+    for (const ep of visibleEps) {
+      if (selectAll) current.add(ep.id);
+      else current.delete(ep.id);
+    }
+    episodeSelections.set(groupKey, current);
     episodeSelections = new Map(episodeSelections);
   }
 
@@ -146,14 +160,37 @@
     }
   }
 
-  async function startShow(group: { key: string; showTitle: string; imageUrl: string | null; programSetId: string | null }) {
+  async function loadAllEpisodes(key: string, programSetId: string, existingItems: ArdItem[]) {
+    if (groupEpisodesLoading.has(key)) return;
+    groupEpisodesLoading.add(key);
+    groupEpisodesLoading = groupEpisodesLoading;
+    try {
+      const eps = await fetchShowEpisodes(programSetId);
+      groupEpisodes.set(key, eps);
+      groupEpisodes = groupEpisodes;
+      // Carry over existing selections; default new episodes to selected
+      const existing = episodeSelections.get(key) ?? new Set(existingItems.map(e => e.id));
+      episodeSelections.set(key, new Set(eps.map(e => existing.has(e.id) ? e.id : e.id)));
+      episodeSelections = new Map(episodeSelections);
+    } catch (e: any) {
+      searchError = e.message ?? 'Failed to load episodes';
+    } finally {
+      groupEpisodesLoading.delete(key);
+      groupEpisodesLoading = groupEpisodesLoading;
+    }
+  }
+
+  async function startShow(group: { key: string; showTitle: string; imageUrl: string | null; programSetId: string | null; items: ArdItem[] }) {
     if (!group.programSetId || submitting.has(group.key)) return;
     submitting.add(group.key);
     submitting = submitting;
     try {
       const allEps = groupEpisodes.get(group.key);
+      const displayEps = allEps ?? group.items;
       const sel = episodeSelections.get(group.key);
-      const episodes = allEps && sel ? allEps.filter(e => sel.has(e.id)) : undefined;
+      // If user has expanded and made a selection, send only those items.
+      // Otherwise send no episodes list — the backend fetches the full series.
+      const episodes = sel ? displayEps.filter(e => sel.has(e.id)) : undefined;
       const { jobId } = await startShowImport(group.programSetId, group.showTitle, group.imageUrl, episodes?.length ? episodes : undefined);
       dispatch('job', { jobId });
     } catch (e: any) {
@@ -204,10 +241,13 @@
 <div class="results">
   {#each groups as group (group.key)}
     {@const item = group.items[0]}
-    {@const fetchedEps = groupEpisodes.get(group.key)}
+    {@const allEps = groupEpisodes.get(group.key)}
+    {@const displayEps = allEps ?? group.items}
     {@const sel = episodeSelections.get(group.key)}
-    {@const totalDur = fetchedEps ? fetchedEps.reduce((s, e) => s + e.duration, 0) : group.totalDuration}
+    {@const totalDur = group.totalDuration}
     {@const selCount = sel?.size ?? null}
+    {@const totalCount = groupCounts.get(group.key) ?? null}
+    {@const hiddenCount = totalCount !== null ? Math.max(0, totalCount - group.items.length) : 0}
 
     <div class="result-card">
       <div class="card-main">
@@ -221,11 +261,9 @@
           <div class="card-title">{group.isShow ? group.showTitle : item.title}</div>
           <div class="card-meta">
             {#if group.isShow}
-              {#if fetchedEps}
-                <span>{fetchedEps.length} episode{fetchedEps.length !== 1 ? 's' : ''}</span>
-                {#if totalDur}<span class="sep">·</span><span>{formatDuration(totalDur)}</span>{/if}
-              {:else if group.items.length > 1}
-                <span>{group.items.length} episodes in results</span>
+              {#if group.items.length > 1}
+                <span>{group.items.length} episodes</span>
+                {#if hiddenCount > 0}<span class="hidden-count">({hiddenCount} hidden)</span>{/if}
                 {#if totalDur}<span class="sep">·</span><span>{formatDuration(totalDur)}</span>{/if}
               {/if}
             {:else}
@@ -272,7 +310,7 @@
       </div>
 
       {#if group.isShow && group.items.length > 1}
-        <button class="ep-toggle" on:click={() => toggleExpand(group.key, group.programSetId)}>
+        <button class="ep-toggle" on:click={() => toggleExpand(group.key)}>
           <svg
             xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"
             width="14" height="14"
@@ -284,41 +322,66 @@
         </button>
 
         {#if expandedGroups.has(group.key)}
+          {@const epFilter = episodeFilters.get(group.key) ?? ''}
+          {@const filteredEps = epFilter ? displayEps.filter(ep => ep.title.toLowerCase().includes(epFilter.toLowerCase())) : displayEps}
           <div class="ep-list">
-            {#if groupEpisodesLoading.has(group.key)}
-              <div class="ep-loading">Loading episodes…</div>
-            {:else}
-              {@const displayEps = groupEpisodes.get(group.key) ?? group.items}
+            <div class="ep-filter-row">
+              <input
+                class="ep-filter"
+                type="search"
+                placeholder="Filter episodes…"
+                value={epFilter}
+                on:input={(e) => { episodeFilters.set(group.key, e.currentTarget.value); episodeFilters = episodeFilters; }}
+              />
+            </div>
+            <div class="ep-select-controls">
+              <button class="btn-link" on:click={() => toggleAllEpisodes(group.key, filteredEps, true)}>All</button>
+              <span class="sep">·</span>
+              <button class="btn-link" on:click={() => toggleAllEpisodes(group.key, filteredEps, false)}>None</button>
               {#if sel}
-                <div class="ep-select-controls">
-                  <button class="btn-link" on:click={() => toggleAllEpisodes(group.key, true)}>All</button>
-                  <span class="sep">·</span>
-                  <button class="btn-link" on:click={() => toggleAllEpisodes(group.key, false)}>None</button>
-                  <span class="ep-sel-count">{sel.size}/{displayEps.length} selected</span>
-                </div>
-              {/if}
-              {#each displayEps as ep (ep.id)}
-                <div class="ep-row">
-                  {#if sel}
-                    <!-- svelte-ignore a11y-click-events-have-key-events -->
-                    <label class="ep-check-label">
-                      <input
-                        type="checkbox"
-                        class="ep-checkbox"
-                        checked={sel.has(ep.id)}
-                        on:change={() => toggleEpisodeSelection(group.key, ep.id)}
-                      />
-                    </label>
+                <span class="ep-sel-count">
+                  {sel.size}/{displayEps.length} selected
+                  {#if epFilter && filteredEps.length !== displayEps.length}
+                    <span class="ep-filter-hint">({filteredEps.length} shown)</span>
                   {/if}
-                  <div class="ep-info">
-                    <span class="ep-title">{ep.title}</span>
-                    <div class="ep-meta">
-                      {#if ep.duration}<span>{formatDuration(ep.duration)}</span>{/if}
-                      {#if ep.publishDate}<span class="sep">·</span><span>{fmtDate(ep.publishDate)}</span>{/if}
-                    </div>
+                </span>
+              {/if}
+            </div>
+            {#each filteredEps as ep (ep.id)}
+              <div class="ep-row">
+                <label class="ep-check-label">
+                  <input
+                    type="checkbox"
+                    class="ep-checkbox"
+                    checked={sel?.has(ep.id) ?? true}
+                    on:change={() => toggleEpisodeSelection(group.key, ep.id)}
+                  />
+                </label>
+                <div class="ep-info">
+                  <span class="ep-title">{ep.title}</span>
+                  <div class="ep-meta">
+                    {#if ep.duration}<span>{formatDuration(ep.duration)}</span>{/if}
+                    {#if ep.publishDate}<span class="sep">·</span><span>{fmtDate(ep.publishDate)}</span>{/if}
                   </div>
                 </div>
-              {/each}
+              </div>
+            {/each}
+            {#if !allEps && group.programSetId}
+              <div class="ep-load-more">
+                <button
+                  class="btn-link"
+                  disabled={groupEpisodesLoading.has(group.key)}
+                  on:click={() => loadAllEpisodes(group.key, group.programSetId ?? '', group.items)}
+                >
+                  {#if groupEpisodesLoading.has(group.key)}
+                    Loading…
+                  {:else if totalCount !== null}
+                    Load all {totalCount} episodes from series
+                  {:else}
+                    Load all episodes from series
+                  {/if}
+                </button>
+              </div>
             {/if}
           </div>
         {/if}
@@ -430,8 +493,34 @@
   }
   .ep-toggle:hover { color: var(--accent); }
 
+  .hidden-count { color: var(--text-muted); opacity: 0.7; font-style: italic; }
+
   .ep-list { border-top: 1px solid var(--border); }
-  .ep-loading { padding: 0.6rem 0.75rem; font-size: 0.78rem; color: var(--text-muted); }
+  .ep-filter-row {
+    padding: 0.4rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-input);
+  }
+  .ep-filter {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg-card);
+    color: var(--text);
+    font-size: 0.78rem;
+    font-family: inherit;
+    padding: 0.25rem 0.5rem;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .ep-filter:focus { border-color: var(--accent); }
+  .ep-filter-hint { opacity: 0.7; }
+  .ep-load-more {
+    padding: 0.4rem 0.75rem;
+    border-top: 1px solid var(--border);
+    background: var(--bg-input);
+  }
+  .ep-load-more .btn-link { font-size: 0.78rem; }
 
   .ep-select-controls {
     display: flex; align-items: center; gap: 0.3rem;

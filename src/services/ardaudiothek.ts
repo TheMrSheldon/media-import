@@ -52,6 +52,16 @@ export async function searchArdAudiothek(query: string): Promise<ArdItem[]> {
   return nodes.map(nodeToItem);
 }
 
+export async function fetchProgramSetCount(programSetId: string): Promise<number> {
+  const data = (await gqlPost(
+    `query ProgramSetCount($id: ID!) {
+      programSet(id: $id) { items { totalCount } }
+    }`,
+    { id: programSetId },
+  )) as Record<string, unknown>;
+  return ((data?.programSet as any)?.items?.totalCount as number) ?? 0;
+}
+
 export async function fetchProgramSetEpisodes(programSetId: string): Promise<ArdItem[]> {
   const data = (await gqlPost(
     `query ProgramSet($id: ID!) {

@@ -6,7 +6,7 @@ import { spawn } from 'child_process';
 import { config } from '../config.js';
 import { createJob, updateJob, getJob, appendLog, setPendingFile, getPendingFile } from '../jobs.js';
 import { downloadFile } from '../services/downloader.js';
-import { searchArdAudiothek, fetchProgramSetEpisodes, type ArdItem } from '../services/ardaudiothek.js';
+import { searchArdAudiothek, fetchProgramSetEpisodes, fetchProgramSetCount, type ArdItem } from '../services/ardaudiothek.js';
 import { problem } from '../problem.js';
 
 const router = Router();
@@ -28,6 +28,15 @@ router.get('/episodes/:programSetId', async (req: Request, res: Response) => {
     res.json({ episodes });
   } catch (e: any) {
     problem(res, 502, '/problems/upstream-error', 'Failed to fetch episodes', e.message);
+  }
+});
+
+router.get('/count/:programSetId', async (req: Request, res: Response) => {
+  try {
+    const count = await fetchProgramSetCount(req.params.programSetId);
+    res.json({ count });
+  } catch (e: any) {
+    problem(res, 502, '/problems/upstream-error', 'Failed to fetch episode count', e.message);
   }
 });
 
