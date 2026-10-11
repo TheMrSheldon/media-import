@@ -386,7 +386,11 @@ function runFfmpeg(jobId: string, args: string[], percentStart = 0, percentEnd =
       }
     });
 
-    proc.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg exited with code ${code}`))));
+    proc.on('close', (code, signal) => {
+      if (code === 0) resolve();
+      else if (signal) reject(new Error(`ffmpeg was killed by signal ${signal}`));
+      else reject(new Error(`ffmpeg exited with code ${code}`));
+    });
     proc.on('error', reject);
   });
 }

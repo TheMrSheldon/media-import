@@ -82,9 +82,10 @@ export async function cutToIntermediate(
         if (line.trim()) onLog(line);
       }
     });
-    proc.on('close', (code) => {
+    proc.on('close', (code, signal) => {
       if (buf.trim()) onLog(buf);
       if (code === 0) resolve();
+      else if (signal) reject(new Error(`ffmpeg (cut pass) was killed by signal ${signal}`));
       else reject(new Error(`ffmpeg (cut pass) exited with code ${code}`));
     });
     proc.on('error', (err) => reject(new Error(`Failed to start ffmpeg: ${err.message}`)));

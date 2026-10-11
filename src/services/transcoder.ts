@@ -43,11 +43,13 @@ function runFfmpeg(
       }
     });
 
-    proc.on('close', (code) => {
+    proc.on('close', (code, signal) => {
       if (buf.trim()) onLog(buf);
       if (code === 0) {
         if (trackProgress) onProgress(100);
         resolve();
+      } else if (signal) {
+        reject(new Error(`ffmpeg was killed by signal ${signal}`));
       } else {
         reject(new Error(`ffmpeg exited with code ${code}`));
       }
