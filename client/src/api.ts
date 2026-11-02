@@ -264,6 +264,18 @@ export async function getLibraryPaths(): Promise<LibraryPaths> {
   return res.json();
 }
 
+// Maps IMDb ID -> the label of the library it was already found in (e.g. "Movies",
+// "Series", or a configured upload destination's label).
+export async function getLibraryImdbIds(): Promise<Record<string, string>> {
+  const res = await fetch(`${BASE}/api/library/imdb-ids`);
+  if (!res.ok) return {};
+  const data = await res.json();
+  const found: Record<string, string> = data.imdbIds ?? {};
+  const normalized: Record<string, string> = {};
+  for (const [id, label] of Object.entries(found)) normalized[id.toLowerCase()] = label;
+  return normalized;
+}
+
 export function startUpload(
   fields: UploadRequest,
   mainFile: File,

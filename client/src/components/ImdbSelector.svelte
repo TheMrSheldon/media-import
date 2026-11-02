@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { searchImdb, type ImdbResult } from '../api.js';
+  import { onMount } from 'svelte';
+  import { searchImdb, getLibraryImdbIds, type ImdbResult } from '../api.js';
 
   export let query: string = '';
   export let selected: ImdbResult | null = null;
@@ -12,6 +13,11 @@
   let searchQuery = '';
   let debounceTimer: ReturnType<typeof setTimeout>;
   let prevQuery = '';
+  let libraryIds: Record<string, string> = {};
+
+  onMount(() => {
+    getLibraryImdbIds().then((ids) => { libraryIds = ids; });
+  });
 
   // Only sync when the parent's query prop changes, not when the user types.
   // Reading searchQuery in this block would make Svelte re-run it on every keystroke,
@@ -96,6 +102,11 @@
               {#if r.year}<span>{r.year}</span>{/if}
               {#if r.type}<span class="type">{r.type}</span>{/if}
               <span class="imdbid">{r.imdbId}</span>
+              {#if libraryIds[r.imdbId.toLowerCase()]}
+                <span class="in-library" title="Already in your library">
+                  In {libraryIds[r.imdbId.toLowerCase()]}
+                </span>
+              {/if}
             </div>
           </div>
           {#if selected?.imdbId === r.imdbId}
@@ -145,6 +156,7 @@
   .meta { display: flex; gap: 0.4rem; font-size: 0.75rem; color: var(--text-muted); margin-top: 0.15rem; }
   .type { background: var(--bg-input); padding: 0.05rem 0.35rem; border-radius: 3px; }
   .imdbid { color: #b45309; }
+  .in-library { background: #dbeafe; color: #1e40af; padding: 0.05rem 0.4rem; border-radius: 3px; font-weight: 600; }
   .check { color: #16a34a; font-size: 1rem; }
   .error { color: var(--error); font-size: 0.875rem; }
 </style>

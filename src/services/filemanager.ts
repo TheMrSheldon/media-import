@@ -1,7 +1,9 @@
-import { mkdir, rename, copyFile, unlink, access } from 'fs/promises';
+import { mkdir, rename, copyFile, unlink, access, readdir } from 'fs/promises';
 import { extname, join } from 'path';
 import { config } from '../config.js';
 import type { ImportRequest } from '../jobs.js';
+
+const IMDB_TAG_RE = /\[imdbid-(tt\d+)\]/i;
 
 export type ExtraType =
   | 'trailer'
@@ -99,6 +101,32 @@ export async function checkConflict(
 // mainName: the sanitized movie name without extension, e.g. "Movie (2000) [imdbid-tt123]"
 export function buildExtraFileNameBase(mainName: string, extraType: ExtraType): string {
   return `${mainName}-${extraType}`;
+}
+
+// Scans the top level of every configured library — the movie and series base dirs, plus
+// every MEDIA_IMPORT_UPLOAD_DESTINATIONS entry — for [imdbid-ttXXXX] tags in folder/file
+// names (movies tag themselves directly, series tag their show folder), returning a map of
+// IMDb ID -> the label of the first library it was found in.
+export async function listLibraryImdbIds(): Promise<Record<string, string>> {
+  const found: Record<string, string> = {};
+  const libraries: { dir: string; label: string }[] = [
+    { dir: config.movieBaseDir, label: 'Movies' },
+    { dir: config.seriesBaseDir, label: 'Series' },
+    ...config.uploadDestinations.map((d) => ({ dir: d.path, label: d.label })),
+  ];
+  for (const { dir, label } of libraries) {
+    let entries: string[];
+    try {
+      entries = await readdir(dir);
+    } catch {
+      continue;
+    }
+    for (const name of entries) {
+      const m = name.match(IMDB_TAG_RE);
+      if (m && !(m[1].toLowerCase() in found)) found[m[1].toLowerCase()] = label;
+    }
+  }
+  return found;
 }
 
 export async function moveToLibrary(
