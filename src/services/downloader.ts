@@ -35,9 +35,16 @@ export function downloadFile(
         });
 
         res.pipe(out);
-        out.on('finish', () => resolve({ receivedBytes, totalBytes }));
+        out.on('finish', () => {
+          if (totalBytes > 0 && receivedBytes !== totalBytes) {
+            reject(new Error(`Download incomplete: received ${receivedBytes} of ${totalBytes} bytes`));
+            return;
+          }
+          resolve({ receivedBytes, totalBytes });
+        });
         out.on('error', reject);
         res.on('error', reject);
+        res.on('aborted', () => reject(new Error(`Download aborted after ${receivedBytes} of ${totalBytes || '?'} bytes`)));
       }).on('error', reject);
     };
 

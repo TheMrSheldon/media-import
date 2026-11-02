@@ -1,5 +1,6 @@
 import { spawn } from 'child_process';
 import type { TranscodeJob } from './preset-parser.js';
+import { runExclusive } from './ffmpeg-queue.js';
 
 function parseDuration(s: string): number {
   const m = s.match(/(\d+):(\d+):(\d+(?:\.\d+)?)/);
@@ -65,14 +66,17 @@ export async function transcodeWithPreset(
   job: TranscodeJob,
   onProgress: (percent: number) => void,
   onLog: (line: string) => void,
+  onWaiting?: () => void,
 ): Promise<void> {
   const { passes } = job;
 
-  for (let i = 0; i < passes.length; i++) {
-    const isLastPass = i === passes.length - 1;
-    if (passes.length > 1) {
-      onLog(`[media-import] Starting pass ${i + 1} of ${passes.length}`);
+  await runExclusive(async () => {
+    for (let i = 0; i < passes.length; i++) {
+      const isLastPass = i === passes.length - 1;
+      if (passes.length > 1) {
+        onLog(`[media-import] Starting pass ${i + 1} of ${passes.length}`);
+      }
+      await runFfmpeg(passes[i], isLastPass, onProgress, onLog);
     }
-    await runFfmpeg(passes[i], isLastPass, onProgress, onLog);
-  }
+  }, onWaiting);
 }

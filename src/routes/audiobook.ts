@@ -7,6 +7,7 @@ import { config } from '../config.js';
 import { createJob, updateJob, getJob, appendLog, setPendingFile, getPendingFile } from '../jobs.js';
 import { downloadFile } from '../services/downloader.js';
 import { searchArdAudiothek, fetchProgramSetEpisodes, fetchProgramSetCount, type ArdItem } from '../services/ardaudiothek.js';
+import { runExclusive } from '../services/ffmpeg-queue.js';
 import { problem } from '../problem.js';
 
 const router = Router();
@@ -366,6 +367,12 @@ function formatDuration(totalSec: number): string {
 // ─── FFmpeg runner ───────────────────────────────────────────────────────────
 
 function runFfmpeg(jobId: string, args: string[], percentStart = 0, percentEnd = 99): Promise<void> {
+  return runExclusive(() => runFfmpegNow(jobId, args, percentStart, percentEnd), () => {
+    updateJob(jobId, { message: 'Waiting for another transcode to finish…' });
+  });
+}
+
+function runFfmpegNow(jobId: string, args: string[], percentStart: number, percentEnd: number): Promise<void> {
   return new Promise((resolve, reject) => {
     const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
     let totalSec = 0;

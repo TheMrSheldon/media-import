@@ -195,7 +195,9 @@ async function runCutPipeline(jobId: string, sourcePath: string, req: CutStartBo
     if (req.segments && req.segments.length > 0) {
       updateJob(jobId, { phase: 'cutting', percent: 0, message: 'Cutting ad segments…' });
       intermediatePath = join(config.tempDir, `${jobId}_cut.mkv`);
-      await cutToIntermediate(sourcePath, req.segments, intermediatePath, (line) => appendLog(jobId, line));
+      await cutToIntermediate(sourcePath, req.segments, intermediatePath, (line) => appendLog(jobId, line), () => {
+        updateJob(jobId, { phase: 'queued', message: 'Waiting for another transcode to finish…' });
+      });
       updateJob(jobId, { phase: 'cutting', percent: 100, message: 'Cut complete' });
       inputForTranscode = intermediatePath;
     }

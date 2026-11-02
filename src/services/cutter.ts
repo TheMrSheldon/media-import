@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import { join } from 'path';
 import { config } from '../config.js';
+import { runExclusive } from './ffmpeg-queue.js';
 
 export interface AdSegment { start: number; end: number; }
 export interface KeepSegment { start: number; end: number; }
@@ -55,6 +56,7 @@ export async function cutToIntermediate(
   adSegments: AdSegment[],
   outPath: string,
   onLog: (line: string) => void,
+  onWaiting?: () => void,
 ): Promise<void> {
   const duration = await getVideoDuration(sourcePath);
   const kept = invertSegments(adSegments, duration);
@@ -71,7 +73,7 @@ export async function cutToIntermediate(
     outPath,
   ];
 
-  await new Promise<void>((resolve, reject) => {
+  await runExclusive(() => new Promise<void>((resolve, reject) => {
     const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
     let buf = '';
     proc.stderr.on('data', (chunk: Buffer) => {
@@ -89,5 +91,5 @@ export async function cutToIntermediate(
       else reject(new Error(`ffmpeg (cut pass) exited with code ${code}`));
     });
     proc.on('error', (err) => reject(new Error(`Failed to start ffmpeg: ${err.message}`)));
-  });
+  }), onWaiting);
 }

@@ -57,8 +57,10 @@ export async function runTranscodeAndMove(
 
   try {
     await transcodeWithPreset(ffmpegJob, (pct) => {
-      updateJob(jobId, { percent: pct, message: `Transcoding… ${pct}%` });
-    }, (line) => appendLog(jobId, line));
+      updateJob(jobId, { phase: 'transcoding', percent: pct, message: `Transcoding… ${pct}%` });
+    }, (line) => appendLog(jobId, line), () => {
+      updateJob(jobId, { phase: 'queued', message: 'Waiting for another transcode to finish…' });
+    });
 
     updateJob(jobId, { phase: 'moving', percent: 100, message: 'Moving to library…' });
     const { dest, renamed } = await moveToLibrary(transcodePath, req, opts);
