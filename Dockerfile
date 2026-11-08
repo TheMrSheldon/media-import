@@ -7,7 +7,7 @@ COPY . .
 RUN npm run build
 
 # Production Container
-FROM node:22-slim
+FROM node:22-trixie-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
