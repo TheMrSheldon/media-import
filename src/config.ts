@@ -63,4 +63,10 @@ export const config = {
   tvheadendDvrUuid: process.env.MEDIA_IMPORT_TVHEADEND_DVR_UUID ?? '',
   uncutPath: process.env.MEDIA_IMPORT_UNCUT_PATH ?? '',
   uploadDestinations: parseUploadDestinations(process.env.MEDIA_IMPORT_UPLOAD_DESTINATIONS),
+  // Caps ffmpeg's internal encoder/decoder thread pool. Without this, libx264/libx265
+  // auto-detect threads from the container's visible CPU count, which under a cgroup CPU
+  // *quota* (rather than cpuset) can be far higher than the pod is actually allowed to run
+  // concurrently — a known trigger for rare segfaults in their threaded code paths. Should
+  // be set to roughly the pod's CPU limit.
+  ffmpegThreads: parseInt(process.env.MEDIA_IMPORT_FFMPEG_THREADS ?? '4', 10),
 };

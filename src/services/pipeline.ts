@@ -35,6 +35,7 @@ export async function runTranscodeAndMove(
         return {
           passes: [[
             '-y', '-i', inputPath,
+            '-threads', String(config.ffmpegThreads),
             '-c:v', 'libx265', '-crf', '22', '-preset', 'medium',
             '-c:a', 'aac', '-b:a', '192k',
             '-movflags', '+faststart',

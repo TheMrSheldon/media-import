@@ -70,6 +70,8 @@ export interface HBPresetFile {
   VersionMajor?: number;
 }
 
+import { config } from '../config.js';
+
 export interface TranscodeJob {
   passes: string[][];
   outputExt: string;
@@ -272,12 +274,15 @@ export function presetToFfmpeg(
   // ── Multi-pass (only meaningful for bitrate mode) ─────────────────────────
   const useMultiPass = (preset.VideoMultiPass ?? false) && qtype !== 2;
 
+  const threadArgs = ['-threads', String(config.ffmpegThreads)];
+
   if (useMultiPass) {
     const passflag = ['-passlogfile', passLogBase];
     const turbo = preset.VideoTurboMultiPass ? ['-preset', 'ultrafast'] : [];
 
     const pass1 = [
       '-y', '-i', inputPath,
+      ...threadArgs,
       '-c:v', videoCodec, ...qualityArgs,
       ...turbo,
       '-pass', '1', ...passflag,
@@ -286,6 +291,7 @@ export function presetToFfmpeg(
 
     const pass2 = [
       '-y', '-i', inputPath,
+      ...threadArgs,
       ...codecArgs, ...frateArgs, ...filterArgs,
       '-pass', '2', ...passflag,
       ...buildAudioArgs(audioTracks),
@@ -298,6 +304,7 @@ export function presetToFfmpeg(
 
   const singlePass = [
     '-y', '-i', inputPath,
+    ...threadArgs,
     ...codecArgs, ...frateArgs, ...filterArgs,
     ...buildAudioArgs(audioTracks),
     ...muxArgs,
